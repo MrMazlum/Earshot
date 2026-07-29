@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 8+ draws the two layers and applies its own mask, so the launcher decides whether
+     Earshot is a circle, a squircle or a rounded square. The pre-8 square icon is the PNG in
+     mipmap-*/ic_launcher.png. Both come from tools/icon/make_icons.py. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

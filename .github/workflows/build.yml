@@ -1,0 +1,151 @@
+name: build
+
+# Every push builds all three artifacts. A tag also publishes them as a release, which is where the
+# download links in the README point.
+#
+# This workflow is not a nicety: the Windows receiver is written on a Linux laptop with no
+# cross-compiler, so **this is the only thing that compiles it**. If the Windows job goes red, the
+# Windows build is broken — there is no local check that would have caught it first.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Only the release job writes anything.
+permissions:
+  contents: read
+
+jobs:
+  receiver:
+    name: receiver (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            package: earshot-receiver-linux-x86_64
+          - os: windows-latest
+            label: windows
+            package: earshot-receiver-windows-x86_64
+    defaults:
+      run:
+        working-directory: receiver
+    steps:
+      - uses: actions/checkout@v7
+
+      # cpal needs ALSA headers and ksni needs D-Bus ones. Windows uses WASAPI and Win32, which
+      # need nothing installed.
+      - name: Install Linux audio and D-Bus headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config
+
+      # --locked throughout: the lockfile is deliberately kept at version 3 so the Rust that Ubuntu
+      # ships (1.75) can still read it. Without this a newer cargo would quietly rewrite it to
+      # version 4 and the dev machine would stop building.
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Clippy
+        run: cargo clippy --release --locked --all-targets -- -D warnings
+
+      # The tray is Linux-only (ksni). On Windows the binary exists but its body compiles to a
+      # message pointing at the receiver, so it is not worth shipping.
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/${{ matrix.package }}
+          cp target/release/earshot-receiver target/release/earshot-tray dist/${{ matrix.package }}/
+          cp README.md dist/${{ matrix.package }}/
+          cp ../LICENSE dist/${{ matrix.package }}/
+          tar -czf dist/${{ matrix.package }}.tar.gz -C dist ${{ matrix.package }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/${{ matrix.package }} | Out-Null
+          Copy-Item target/release/earshot-receiver.exe dist/${{ matrix.package }}/
+          Copy-Item README.md dist/${{ matrix.package }}/
+          Copy-Item ../LICENSE dist/${{ matrix.package }}/
+          Compress-Archive -Path dist/${{ matrix.package }}/* -DestinationPath dist/${{ matrix.package }}.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.package }}
+          path: receiver/dist/${{ matrix.package }}.*
+          if-no-files-found: error
+
+  app:
+    name: android apk
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      # Includes the pairing-code vectors, which the Rust job checks against the same file. If the
+      # two implementations ever drift, one of these two jobs goes red.
+      - run: flutter test
+      - run: flutter build apk --release
+
+      # ⚠️ Signed with the debug key — android/app/build.gradle.kts still says so. That is fine for
+      # sideloading but means a CI build and a local build have different signatures, so one will
+      # not upgrade over the other. Real signing is a P7 job and needs a keystore that must never
+      # be committed to this repo.
+      - name: Name the APK after the build
+        run: mv build/app/outputs/flutter-apk/app-release.apk earshot.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: earshot-apk
+          path: app/earshot.apk
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    # Only tags publish. Everything above still runs on every push, as a check.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [receiver, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Earshot ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            artifacts/earshot-apk/earshot.apk \
+            artifacts/earshot-receiver-linux-x86_64/*.tar.gz \
+            artifacts/earshot-receiver-windows-x86_64/*.zip

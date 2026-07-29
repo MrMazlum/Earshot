@@ -1,0 +1,53 @@
+[package]
+name = "earshot-receiver"
+version = "0.1.0"
+edition = "2021"
+# Ubuntu 24.04 ships Rust 1.75 and that is what is actually installed on the dev laptop. Keep this
+# pinned so a newer-only API fails at compile time here, rather than on the owner's machine.
+rust-version = "1.75"
+description = "Earshot PC receiver — turns your phone into this machine's microphone"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/MrMazlum/Earshot"
+
+[dependencies]
+cpal = "0.15"
+# Enumerating local interfaces, which std cannot do. Needed because the default route is not the
+# LAN when a VPN is up (Cloudflare WARP, Tailscale) and we would otherwise tell the phone to
+# connect to an address it cannot reach. Tiny, no transitive deps beyond libc/windows-sys.
+if-addrs = "0.13"
+
+# The tray icon, Linux only. `ksni` speaks StatusNotifierItem over D-Bus directly, in Rust — which
+# is why it is preferred over `tray-icon`/`libappindicator`: those need
+# libayatana-appindicator3-dev, a system package the dev machine does not have. GNOME needs the
+# (Ubuntu-default) AppIndicator extension either way.
+#
+# Target-gated rather than merely optional, so a Windows build never tries to resolve it. The
+# `earshot-tray` binary still exists on Windows; its body compiles down to a message saying to use
+# earshot-receiver instead.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.2", optional = true }
+
+[features]
+default = ["tray"]
+tray = ["dep:ksni"]
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[lib]
+name = "earshot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "earshot-receiver"
+path = "src/main.rs"
+
+[[bin]]
+name = "earshot-testsend"
+path = "src/bin/testsend.rs"
+
+[[bin]]
+name = "earshot-tray"
+path = "src/bin/tray.rs"
+required-features = ["tray"]

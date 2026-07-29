@@ -1,0 +1,42 @@
+# Rust
+/receiver/target/
+**/*.rs.bk
+
+# Flutter / Android
+/app/build/
+/app/.dart_tool/
+/app/.flutter-plugins*
+/app/android/.gradle/
+/app/android/local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+key.properties
+
+# Secrets — never commit
+*.pem
+*.p12
+*.env
+.env.*
+secrets/
+local.config.*
+
+# Recordings and captures (may contain the owner's voice / network detail)
+*.wav
+*.flac
+*.pcap
+*.pcapng
+/tools/**/out/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local agent/assistant config — kept out of the published tree.
+# CLAUDE.md stays on disk for local tooling; CONTRIBUTING.md is the version that ships.
+.claude/
+.agents/
+CLAUDE.md
