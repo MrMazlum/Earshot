@@ -1,5 +1,6 @@
 # Rust
 /receiver/target/
+/receiver/dist/
 **/*.rs.bk
 
 # Flutter / Android

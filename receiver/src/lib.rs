@@ -10,6 +10,7 @@
 pub mod audio;
 #[cfg(all(feature = "tray", target_os = "linux"))]
 pub mod autostart;
+pub mod cable;
 pub mod engine;
 pub mod pairing;
 pub mod proto;

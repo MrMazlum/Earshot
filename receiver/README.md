@@ -59,7 +59,8 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
 | `resample.rs` | phone rate → sound-card rate, e.g. a 16 kHz mic into a 44.1 kHz card |
 | `ring.rs` | the lock-free handoff to the audio callback. Its fill level *is* the buffering latency |
 | `audio.rs` | cpal output. Everything in the callback is allocation- and lock-free |
-| `virtualmic.rs` | creates the PipeWire null sink + remapped source that Discord sees |
+| `virtualmic.rs` | the device Discord sees. Linux creates it (PipeWire null sink + remapped source); Windows cannot, and borrows one |
+| `cable.rs` | Windows only: which virtual cables are recognised, and the guided path when none is installed — detect, explain, open the vendor's page, wait for the cable to appear, carry on |
 | `engine.rs` | the receive loop, headless. Owns the thread and publishes `Status`; both front-ends read it. **Behaviour changes belong here**, not in a front-end. Also picks the address to show the phone — see below |
 | `autostart.rs` | the `~/.config/autostart` login item |
 | `main.rs` | terminal front-end: the banner and the once-a-second stats line |
@@ -79,7 +80,23 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
 
 Design notes: `~/EarshotBrain/` — start with `06-Latency-Budget.md` and `05-Wire-Protocol.md`.
 
+## On Windows
+
+There is no cross-compiler here, so **CI is the only thing that compiles this target** — read the
+Windows-gated code as if it will not be tested, because locally it is not. Two things follow from
+that:
+
+- **Everything printed to a terminal is plain ASCII.** A Windows console is not reliably UTF-8; on a
+  Turkish or Western-European code page an em dash or an ellipsis becomes mojibake, and that text is
+  the first thing a Windows user reads. Doc comments can have whatever typography they like
+- **`windows/earshot.bat`** is what ships in the zip and is what a user double-clicks. The bare
+  `.exe` from Explorer would play to the speakers, because `--virtual-mic` is not the default
+
+`cable.rs` covers the missing-cable case; `main.rs` covers the two silent failures — a console window
+that closes before an error can be read, and inbound UDP dropped by the firewall, which from here is
+indistinguishable from a phone that is not sending.
+
 ## Not here yet
 
-Opus decoding (needs `libopus-dev`), the virtual microphone on **Windows and macOS** (Linux works),
-the PC → phone direction, discovery, pairing and encryption.
+Opus decoding (needs `libopus-dev`), a tray icon on Windows (`ksni` is Linux-only), the PC → phone
+direction, discovery, pairing and encryption.

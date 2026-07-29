@@ -40,7 +40,7 @@ mod platform {
     fn pactl(args: &[&str]) -> Result<String, String> {
         let out = Command::new("pactl").args(args).output().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "`pactl` not found — Earshot's virtual microphone needs PipeWire or PulseAudio \
+                "`pactl` not found - Earshot's virtual microphone needs PipeWire or PulseAudio \
                  (install `pulseaudio-utils`)"
                     .to_string()
             } else {
@@ -147,59 +147,33 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     //! Windows has no way to invent an audio endpoint without a signed kernel driver, so Earshot
-    //! does not try. It looks for VB-Cable — a free virtual cable everyone in this space depends
-    //! on — and plays into its input half.
+    //! does not try. It looks for a virtual cable that is already installed and plays into its
+    //! playback half; [`crate::cable`] holds the list of cables it recognises, the reasoning, and
+    //! the guided path for a machine that has none.
     //!
-    //! The names are the confusing part, and they are backwards from what you expect:
-    //!   - **CABLE Input** is a *playback* device. Earshot plays into it
-    //!   - **CABLE Output** is a *recording* device. **That is what the user picks in Discord**
-    //!
-    //! Nothing is created and nothing is removed; the cable belongs to VB-Cable's installer.
+    //! Nothing is created and nothing is removed; the cable belongs to its own installer.
 
     use super::Devices;
 
-    /// The playback half — what we open.
-    const CABLE_PLAYBACK: &str = "CABLE Input";
-    /// The recording half — what the user selects in an application.
-    const CABLE_CAPTURE: &str = "CABLE Output";
-    const DOWNLOAD: &str = "https://vb-audio.com/Cable/";
-
     pub fn ensure(_name: &str) -> Result<Devices, String> {
-        let devices = crate::audio::output_device_names()?;
-        let found = devices
-            .iter()
-            .find(|d| d.to_lowercase().contains(&CABLE_PLAYBACK.to_lowercase()));
-
-        match found {
-            Some(device) => Ok(Devices {
-                device_hint: device.clone(),
-                display: CABLE_CAPTURE.to_string(),
-                // VB-Cable's device is installed, not created by us, so it is never "new".
+        match crate::cable::find()? {
+            Some(found) => Ok(Devices {
+                device_hint: found.playback_device,
+                display: found.capture.to_string(),
+                // The cable is installed, not created by us, so it is never "new".
                 created: false,
             }),
-            None => Err(format!(
-                "no virtual audio cable found.\n\n\
-                 Windows cannot create a microphone without a signed driver, so Earshot uses \
-                 VB-Cable — free, and a one-off install:\n\
-                 \n    {DOWNLOAD}\n\n\
-                 Install it, reboot, and run this again. Then pick \"{CABLE_CAPTURE}\" as your \
-                 microphone in Discord.\n\n\
-                 If you already have another virtual cable, point Earshot at its playback device \
-                 by hand instead:\n\
-                 \n    earshot-receiver --device \"<its playback device>\"\n\n\
-                 Playback devices found: {}",
-                if devices.is_empty() {
-                    "none".to_string()
-                } else {
-                    devices.join(", ")
-                }
+            // `cable::preflight` normally gets there first and offers to fix this, so reaching here
+            // means the tray or a non-interactive run hit it. The message still has to stand alone.
+            None => Err(crate::cable::missing_message(
+                &crate::audio::output_device_names().unwrap_or_default(),
             )),
         }
     }
 
     pub fn clear_routing() {}
 
-    /// Nothing to remove — the cable is VB-Cable's, and uninstalling it is its own installer's job.
+    /// Nothing to remove — the cable is its vendor's, and uninstalling it is that installer's job.
     pub fn remove(_name: &str) -> Result<bool, String> {
         Ok(false)
     }

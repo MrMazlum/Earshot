@@ -51,7 +51,14 @@ on older toolchains.
 
 CI builds the receiver on Linux **and** Windows on every push. There is no cross-compiler in the
 usual development setup, so the Windows job is the only thing that compiles that target — if it
-goes red, it is broken, and nothing local would have caught it.
+goes red, it is broken, and nothing local would have caught it. Anything behind
+`#[cfg(target_os = "windows")]` should therefore be written as if it will not be tested, and the
+platform-independent logic pulled out of it and unit-tested where it can be.
+
+**Everything printed to a terminal is plain ASCII** — no em dashes, no ellipsis characters, no
+arrows. A Windows console is not reliably UTF-8, and on a Turkish or Western-European code page that
+text becomes mojibake for the first thing a new user reads. Doc comments, Markdown and the Linux
+tray's menu labels can have whatever typography they like.
 
 ## Never commit
 

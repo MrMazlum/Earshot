@@ -214,13 +214,46 @@ impl std::fmt::Display for LanAddress {
 
 /// Interfaces that are never the Wi-Fi the phone is on: container bridges, VM bridges, and the
 /// tunnel devices of VPNs that name themselves conventionally.
+///
+/// These are *Linux* device names, matched at the start, where a name is short and the prefix is
+/// the whole identity of the thing (`docker0`, `wg0`, `virbr1`).
 const VIRTUAL_PREFIXES: &[&str] = &[
     "virbr", "docker", "br-", "veth", "tun", "tap", "wg", "tailscale", "zt", "utun", "vmnet",
+];
+
+/// The same idea for Windows, which needs its own list and its own matching rule.
+///
+/// `if_addrs` reports the adapter's **friendly name** on Windows — what Network Connections shows —
+/// so the interesting word is in the middle, not at the start: `VMware Network Adapter VMnet8`,
+/// `vEthernet (Default Switch)`, `ZeroTier One [8056c2e21c000001]`. A prefix test sees none of
+/// those, which matters because a VMware or VirtualBox host-only adapter holds a perfectly ordinary
+/// `192.168.x.1/24` — private, not a `/32`, and therefore ranked *first*, ahead of the real Wi-Fi.
+/// The receiver would then lead with a pairing code for a network the phone cannot reach.
+///
+/// Kept specific enough not to swallow a real adapter: `vethernet` does not match `Ethernet`.
+const VIRTUAL_SUBSTRINGS: &[&str] = &[
+    "vmware",
+    "virtualbox",
+    "vbox",
+    "vmnet",
+    "vethernet",
+    "hyper-v",
+    "zerotier",
+    "hamachi",
+    "radmin",
+    "wireguard",
+    "wintun",
+    "openvpn",
+    "tap-windows",
+    "nordlynx",
+    "loopback",
+    "npcap",
 ];
 
 fn looks_virtual(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     VIRTUAL_PREFIXES.iter().any(|p| name.starts_with(p))
+        || VIRTUAL_SUBSTRINGS.iter().any(|s| name.contains(s))
 }
 
 /// Whether an address is worth offering as "type this into your phone".
@@ -328,7 +361,7 @@ fn setup(config: &Config) -> Result<Started, String> {
     // and failing here leaves no half-built audio devices behind.
     let socket = UdpSocket::bind(&config.listen).map_err(|e| match e.kind() {
         std::io::ErrorKind::AddrInUse => format!(
-            "{} is already in use — another Earshot receiver is probably running.\n\
+            "{} is already in use - another Earshot receiver is probably running.\n\
              Stop it, or give this one its own port with --listen 0.0.0.0:47899",
             config.listen
         ),
@@ -407,7 +440,7 @@ fn pump(
                         } else if matches!(e, ParseError::BadVersion(_)) && !warned_version {
                             warned_version = true;
                             status.notice(format!(
-                                "! {from} speaks a different protocol version — update one side"
+                                "! {from} speaks a different protocol version - update one side"
                             ));
                         }
                         continue;
@@ -485,7 +518,7 @@ fn pump(
             if idle && status.connected.load(Ordering::Relaxed) {
                 status.connected.store(false, Ordering::Relaxed);
                 *lock(&status.peer) = None;
-                status.notice("… no packets for a moment (phone stopped, or Wi-Fi dropped)");
+                status.notice("... no packets for a moment (phone stopped, or Wi-Fi dropped)");
             }
             if unsupported_type > 0 && config.verbose {
                 status.notice(format!(
@@ -527,7 +560,7 @@ fn drain_reorder(
                         if src_rate == out.sample_rate {
                             String::new()
                         } else {
-                            format!(" → resampling to {} kHz", out.sample_rate / 1000)
+                            format!(" -> resampling to {} kHz", out.sample_rate / 1000)
                         }
                     ));
                     *resampler = Resampler::new(src_rate, out.sample_rate);
@@ -605,6 +638,40 @@ mod tests {
             Ipv4Addr::new(192, 168, 1, 42),
             Ipv4Addr::new(255, 255, 255, 0),
         ));
+    }
+
+    /// Windows names its adapters nothing like Linux does, and the ones below all carry a private,
+    /// non-`/32` address that would otherwise outrank the Wi-Fi.
+    #[test]
+    fn windows_virtual_adapters_are_not_offered_either() {
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        for name in [
+            "VMware Network Adapter VMnet1",
+            "VMware Network Adapter VMnet8",
+            "VirtualBox Host-Only Network",
+            "vEthernet (Default Switch)",
+            "vEthernet (WSL)",
+            "ZeroTier One [8056c2e21c000001]",
+            "Loopback Pseudo-Interface 1",
+        ] {
+            assert!(
+                !is_lan_candidate(name, Ipv4Addr::new(192, 168, 56, 1), mask),
+                "{name} should not be offered to the phone"
+            );
+        }
+    }
+
+    /// The other half of that rule: the real thing on Windows is called "Wi-Fi" or "Ethernet", and
+    /// the substring list must not eat either of them.
+    #[test]
+    fn the_real_windows_adapters_survive_the_filter() {
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        for name in ["Wi-Fi", "Ethernet", "Ethernet 2", "Wi-Fi 2"] {
+            assert!(
+                is_lan_candidate(name, Ipv4Addr::new(192, 168, 1, 42), mask),
+                "{name} is a real network and must be offered"
+            );
+        }
     }
 
     #[test]

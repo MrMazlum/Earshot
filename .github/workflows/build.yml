@@ -69,15 +69,21 @@ jobs:
           cp ../LICENSE dist/${{ matrix.package }}/
           tar -czf dist/${{ matrix.package }}.tar.gz -C dist ${{ matrix.package }}
 
+      # earshot.bat is what makes this double-clickable: the bare .exe run from Explorer would play
+      # to the speakers instead of acting as a microphone, because --virtual-mic is not the default.
+      #
+      # -Path names the folder, not its contents, so the zip has one folder inside it. With `/*` the
+      # files land loose in whatever the user extracted into, which is usually Downloads.
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/${{ matrix.package }} | Out-Null
           Copy-Item target/release/earshot-receiver.exe dist/${{ matrix.package }}/
+          Copy-Item windows/earshot.bat dist/${{ matrix.package }}/
           Copy-Item README.md dist/${{ matrix.package }}/
           Copy-Item ../LICENSE dist/${{ matrix.package }}/
-          Compress-Archive -Path dist/${{ matrix.package }}/* -DestinationPath dist/${{ matrix.package }}.zip
+          Compress-Archive -Path dist/${{ matrix.package }} -DestinationPath dist/${{ matrix.package }}.zip
 
       - uses: actions/upload-artifact@v7
         with:

@@ -8,11 +8,16 @@
 //! Roadmap and exit gates: `~/EarshotBrain/MASTER_ROADMAP.md`.
 
 use earshot::audio;
+use earshot::cable;
 use earshot::engine::{self, Config, Engine};
 use earshot::pairing::Code;
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+
+/// Nothing has arrived for this long and something is probably in the way. Generous on purpose: a
+/// user who is still walking over to pick up their phone should not be lectured about firewalls.
+const FIRST_PACKET_HINT: Duration = Duration::from_secs(25);
 
 #[derive(Default)]
 struct Args {
@@ -44,9 +49,11 @@ VIRTUAL MICROPHONE:
         --remove-virtual-mic   delete it and exit. It otherwise stays until you reboot, so
                                apps do not forget which input you chose
 
-    Linux    creates the device itself — nothing to install.
-    Windows  needs VB-Cable (free, one-off): https://vb-audio.com/Cable/
-             Earshot plays into 'CABLE Input'; you pick 'CABLE Output' as your mic.
+    Linux    creates the device itself - nothing to install.
+    Windows  borrows a virtual cable, because it cannot create one. With --virtual-mic
+             it looks for VB-Cable and, if none is installed, offers to open the
+             download page and then waits for it. Earshot plays into 'CABLE Input';
+             you pick 'CABLE Output' as your microphone.
 
 TIP:
     earshot-tray puts all of this in the system tray instead, and can start at login.
@@ -87,49 +94,103 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// Why no audio has arrived, in the order the causes are actually likely.
+///
+/// The firewall is first on Windows for a reason: inbound UDP to a program with no rule is dropped
+/// by default, the prompt that would have offered to allow it needs an administrator and is often
+/// never shown at all, and the symptom is indistinguishable from a phone that is not sending. On
+/// Linux the default is the other way round — nothing blocks inbound unless the user turned a
+/// firewall on — so the same hint leads with the network instead.
+fn print_nothing_arriving_hint(port: u16) {
+    println!("  ! Nothing has arrived yet.");
+    if cfg!(target_os = "windows") {
+        println!("    If the phone says it is sending, Windows Firewall is the usual reason: it");
+        println!("    drops incoming UDP for a program that has no rule, and the prompt that would");
+        println!("    have asked you needs an administrator. In an Administrator PowerShell:");
+        println!();
+        println!(
+            "      New-NetFirewallRule -DisplayName Earshot -Direction Inbound \
+             -Protocol UDP -LocalPort {port} -Action Allow"
+        );
+        println!();
+        println!("    Then check: the phone and this PC on the same Wi-Fi, and this network set to");
+        println!("    Private rather than Public in Windows settings.");
+    } else {
+        println!("    Check the phone and this PC are on the same Wi-Fi, and that the code or");
+        println!("    address in the app matches the one above. If a firewall is running:");
+        println!();
+        println!("      sudo ufw allow {port}/udp");
+    }
+    println!();
+    println!("    Guest or client-isolation Wi-Fi blocks device-to-device traffic entirely; a");
+    println!("    phone hotspot with the PC joined to it is a reliable way to rule that out.");
+}
+
+/// Prints and exits — but on Windows, waits first.
+///
+/// Double-clicking an `.exe` in Explorer opens a console window that closes the instant the process
+/// ends, so an error message would flash past unread and the user would be left with nothing at all
+/// to go on. One keypress is a small price in a terminal; a closed or piped stdin returns
+/// immediately, so scripts and CI are unaffected.
+fn die(message: &str, code: i32) -> ! {
+    eprintln!("{message}");
+    if cfg!(target_os = "windows") {
+        eprintln!();
+        eprint!("Press Enter to close this window.");
+        let mut discard = String::new();
+        let _ = std::io::stdin().read_line(&mut discard);
+    }
+    std::process::exit(code);
+}
+
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(2);
-        }
+        Err(e) => die(&e, 2),
     };
 
     if args.remove_virtual_mic {
         let name = &args.config.virtual_mic_name;
         match earshot::virtualmic::remove(name) {
             Ok(true) => println!("Removed the virtual microphone '{name}'."),
+            // Only Linux has a device of its own to take away. On Windows the cable belongs to
+            // VB-Cable, and saying "none was loaded" would imply Earshot had failed at something.
+            Ok(false) if cfg!(target_os = "windows") => println!(
+                "Nothing to remove. On Windows the virtual microphone is the cable's, not \
+                 Earshot's - uninstall VB-Cable through Windows if you want it gone."
+            ),
             Ok(false) => println!("No virtual microphone called '{name}' was loaded."),
-            Err(e) => {
-                eprintln!("error: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => die(&format!("error: {e}"), 1),
         }
         return;
     }
 
     if args.list_devices {
         if let Err(e) = audio::list_devices() {
-            eprintln!("cannot list devices: {e}");
-            std::process::exit(1);
+            die(&format!("cannot list devices: {e}"), 1);
         }
         return;
     }
 
     if let Err(e) = run(args.config) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        die(&format!("error: {e}"), 1);
     }
 }
 
 fn run(config: Config) -> Result<(), String> {
     let buffer_ms = config.buffer_ms;
     let listen = config.listen.clone();
+
+    println!("Earshot receiver");
+    // Before the engine, not inside it: this may print pages of guidance and read from stdin, and
+    // the engine's setup path runs on the receive thread where neither belongs. On success a cable
+    // now exists, so the engine's own lookup cannot fail. No-op off Windows.
+    if config.virtual_mic {
+        cable::preflight()?;
+    }
     let engine = Engine::start(config)?;
     let ready = engine.ready().clone();
 
-    println!("Earshot receiver");
     match &ready.virtual_mic {
         Some(name) => println!(
             "  output   virtual microphone \"{}\" ({} Hz, {} ch){}",
@@ -137,7 +198,7 @@ fn run(config: Config) -> Result<(), String> {
             ready.out_rate,
             ready.out_channels,
             if ready.virtual_mic_created {
-                " — created just now"
+                " - created just now"
             } else {
                 ""
             }
@@ -178,7 +239,7 @@ fn run(config: Config) -> Result<(), String> {
         }
     } else if let Some(ip) = engine::lan_ip() {
         println!("  In the phone app, try:   {ip}   port {}", ready.port);
-        println!("  ! No ordinary LAN address found — that is the default route, and if a VPN");
+        println!("  ! No ordinary LAN address found - that is the default route, and if a VPN");
         println!("    is up the phone will not be able to reach it.");
     } else {
         println!("  listening on {listen} (could not detect this machine's LAN address)");
@@ -186,7 +247,7 @@ fn run(config: Config) -> Result<(), String> {
     if let Some(name) = &ready.virtual_mic {
         println!();
         println!("  In Discord / OBS / Zoom, pick this input:   {name}");
-        println!("  Nothing plays out of the speakers in this mode — that is the point.");
+        println!("  Nothing plays out of the speakers in this mode - that is the point.");
         // Only Linux creates the device, so only Linux has one to take away again.
         if cfg!(target_os = "linux") {
             println!("  It survives restarts of this program. Remove it with:");
@@ -194,14 +255,28 @@ fn run(config: Config) -> Result<(), String> {
         }
     }
     println!();
-    println!("Waiting for the phone… (Ctrl-C to stop)");
+    println!("Waiting for the phone... (Ctrl-C to stop)");
 
     let status = engine.status();
     let mut last_line = Instant::now();
+    let started = Instant::now();
+    let mut hinted = false;
 
     while engine.is_running() {
         for notice in status.take_notices() {
             println!("{notice}");
+        }
+        // The worst failure this program can have is a silent one: the phone says "sending", the
+        // receiver says "waiting", and neither says why. A blocked inbound port looks exactly like
+        // an idle phone from here, so after a while say so out loud - once.
+        if !hinted
+            && started.elapsed() >= FIRST_PACKET_HINT
+            && status.packets.load(Ordering::Relaxed) == 0
+        {
+            hinted = true;
+            println!();
+            print_nothing_arriving_hint(ready.port);
+            println!();
         }
         if last_line.elapsed() >= Duration::from_secs(1) {
             last_line = Instant::now();

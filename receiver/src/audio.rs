@@ -69,7 +69,7 @@ pub fn list_devices() -> Result<(), cpal::DevicesError> {
             .default_output_config()
             .map(|c| format!("{} Hz, {} ch", c.sample_rate().0, c.channels()))
             .unwrap_or_else(|_| "unavailable".into());
-        println!("  {name}{mark}  —  {rate}");
+        println!("  {name}{mark}  -  {rate}");
     }
     Ok(())
 }

@@ -47,7 +47,14 @@ Publishing invites people to look for holes — better to find them first.
 ## 5. Licence and attribution
 - [ ] `LICENSE` present and correct; headers where the project convention requires them
 - [ ] Third-party licences acknowledged (libopus, Oboe, crates)
-- [ ] The Windows VB-Cable dependency disclosed in the README as a closed-source third-party component the user installs themselves
+- [x] The Windows VB-Cable dependency disclosed in the README as a closed-source third-party
+      component the user installs themselves ("The honest parts")
+- [x] **The guided install never fetches or executes anything.** `receiver/src/cable.rs` detects a
+      missing cable, explains it, and opens VB-Audio's own page in the browser. Downloading the
+      driver pack and elevating it for the user was considered and rejected: it is a third-party
+      kernel driver, there is no published checksum to verify a download against, and teaching users
+      to accept a silent elevated install is a bad habit to build into a tool. If that ever changes,
+      it needs a checksum shown to the user and an explicit opt-in flag
 
 ## 6. Publication hygiene
 - [ ] README honest about status and about **measured** latency (no unmeasured claims)
