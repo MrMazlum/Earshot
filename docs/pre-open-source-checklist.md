@@ -52,9 +52,14 @@ the public repo from a fresh, squashed initial commit).
       certificates, JWTs, and quoted `password=` / `secret=` assignments. **Zero hits on every
       one.** A dedicated scanner is still worth running as a second opinion, not as a suspicion
 - [ ] Enable GitHub secret scanning + push protection on the repo before it goes public
-- [ ] ⚠️ **Do not `git push --all`.** A local `backup-pre-squash` branch still holds the pre-squash
-      history. It has been reviewed and contains no secret, but it is not meant to be published, and
-      the remote currently has only `main`, `v0.1.0` and `v0.1.1`. Delete it or keep pushing by name
+- [x] ✅ **`backup-pre-squash` is gone from the repo (2026-07-30), and this is why it mattered.** A
+      final sweep found **six `Co-Authored-By:` trailers naming an AI assistant** — on that branch
+      and *only* that branch. `main` has zero, and the remote only ever had `main` plus tags, so
+      nothing was ever exposed. But it made a single `git push --all` enough to break the owner's
+      standing rule permanently, on a repo about to be public. The branch was archived to
+      `git bundle` outside the repo (`verify` reports a complete history) and then deleted, so the
+      footgun no longer exists rather than being documented around. `git log -p --all | grep -i
+      anthropic` now returns nothing
 
 ## 2. Credentials and signing
 - [x] No Android keystore, `key.properties`, or upload key in the tree or history. `.gitignore`
