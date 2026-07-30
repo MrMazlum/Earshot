@@ -9,6 +9,7 @@
 use earshot::audio;
 use earshot::cable;
 use earshot::engine::{self, Config, Engine};
+use earshot::help;
 use earshot::pairing::Code;
 
 use std::sync::atomic::Ordering;
@@ -55,8 +56,9 @@ VIRTUAL MICROPHONE:
              you pick 'CABLE Output' as your microphone.
 
 TIP:
-    earshot-tray puts all of this in the system tray instead, and can start at login.
-    Linux only for now.
+    earshot-tray puts all of this in the system tray instead, with no terminal at all,
+    and can start at login. It works on Linux and on Windows, where it is shipped as
+    Earshot.exe.
 ";
 
 fn parse_args() -> Result<Args, String> {
@@ -93,50 +95,11 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
-/// Why no audio has arrived, in the order the causes are actually likely.
-///
-/// The firewall is first on Windows for a reason: inbound UDP to a program with no rule is dropped
-/// by default, the prompt that would have offered to allow it needs an administrator and is often
-/// never shown at all, and the symptom is indistinguishable from a phone that is not sending. On
-/// Linux the default is the other way round — nothing blocks inbound unless the user turned a
-/// firewall on — so the same hint leads with the network instead.
-///
-/// Built as a string rather than printed line by line so both branches can be read back in a test.
-/// The Windows text is the one that matters most and the one no local build ever runs.
-fn nothing_arriving_hint(port: u16, windows: bool) -> String {
-    let mut lines: Vec<String> = vec!["  ! Nothing has arrived yet.".into()];
-    if windows {
-        lines.extend([
-            "    If the phone says it is sending, Windows Firewall is the usual reason: it".into(),
-            "    drops incoming UDP for a program that has no rule, and the prompt that would".into(),
-            "    have asked you needs an administrator. In an Administrator PowerShell:".into(),
-            String::new(),
-            format!(
-                "      New-NetFirewallRule -DisplayName Earshot -Direction Inbound \
-                 -Protocol UDP -LocalPort {port} -Action Allow"
-            ),
-            String::new(),
-            "    Then check: the phone and this PC on the same Wi-Fi, and this network set to".into(),
-            "    Private rather than Public in Windows settings.".into(),
-        ]);
-    } else {
-        lines.extend([
-            "    Check the phone and this PC are on the same Wi-Fi, and that the code or".into(),
-            "    address in the app matches the one above. If a firewall is running:".into(),
-            String::new(),
-            format!("      sudo ufw allow {port}/udp"),
-        ]);
-    }
-    lines.extend([
-        String::new(),
-        "    Guest or client-isolation Wi-Fi blocks device-to-device traffic entirely; a".into(),
-        "    phone hotspot with the PC joined to it is a reliable way to rule that out.".into(),
-    ]);
-    lines.join("\n")
-}
-
 fn print_nothing_arriving_hint(port: u16) {
-    println!("{}", nothing_arriving_hint(port, cfg!(target_os = "windows")));
+    println!(
+        "{}",
+        help::nothing_arriving_hint(port, cfg!(target_os = "windows"))
+    );
 }
 
 /// Prints and exits — but on Windows, waits first.
@@ -265,6 +228,12 @@ fn run(config: Config) -> Result<(), String> {
         if cfg!(target_os = "linux") {
             println!("  It survives restarts of this program. Remove it with:");
             println!("      earshot-receiver --remove-virtual-mic");
+        } else {
+            // The name is VB-Audio's, not ours, and "why is it not called Earshot" is the first
+            // thing every Windows user asks. Answer it before they have to.
+            println!("  That is the cable's name, not Earshot's - Windows will not let a program");
+            println!("  invent a microphone. Rename it in Sound settings if you would rather:");
+            println!("      control mmsys.cpl,,1   ->   right-click it   ->   Properties");
         }
     }
     println!();
@@ -335,45 +304,10 @@ fn run(config: Config) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// A Windows console is not reliably UTF-8. On the Turkish code page (857) or a
-    /// Western-European one (1252), an em dash or an ellipsis renders as mojibake — and `--help`
-    /// and this hint are the first things a confused user reads. Doc comments are exempt; anything
-    /// that reaches a terminal is not.
+    /// `--help` is the other thing a confused Windows user reads, and a Turkish code page turns
+    /// an em dash in it into mojibake. The troubleshooting text has its own test in `help`.
     #[test]
-    fn everything_printed_to_a_terminal_is_plain_ascii() {
+    fn the_usage_text_is_plain_ascii() {
         assert!(USAGE.is_ascii(), "USAGE is not ascii");
-        for windows in [true, false] {
-            let hint = nothing_arriving_hint(47811, windows);
-            assert!(hint.is_ascii(), "hint (windows={windows}) is not ascii:\n{hint}");
-        }
-    }
-
-    /// The Windows branch is the one that matters and the one no build on this machine ever runs,
-    /// so it is checked from here rather than trusted.
-    #[test]
-    fn the_windows_hint_hands_over_a_firewall_rule_for_the_actual_port() {
-        let hint = nothing_arriving_hint(47899, true);
-        assert!(hint.contains("New-NetFirewallRule"), "{hint}");
-        assert!(hint.contains("-LocalPort 47899"), "{hint}");
-        assert!(!hint.contains("ufw"), "that is the Linux advice: {hint}");
-    }
-
-    #[test]
-    fn the_linux_hint_does_not_tell_anyone_to_open_powershell() {
-        let hint = nothing_arriving_hint(47811, false);
-        assert!(hint.contains("sudo ufw allow 47811/udp"), "{hint}");
-        assert!(!hint.contains("PowerShell"), "{hint}");
-    }
-
-    /// Both platforms share the closing paragraph: guest Wi-Fi defeats everything above it, and
-    /// saying so is what stops the next hour going into firewall rules that were never the problem.
-    #[test]
-    fn both_platforms_mention_client_isolation() {
-        for windows in [true, false] {
-            assert!(
-                nothing_arriving_hint(47811, windows).contains("client-isolation"),
-                "windows={windows}"
-            );
-        }
     }
 }

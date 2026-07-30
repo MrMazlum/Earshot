@@ -72,6 +72,16 @@ pub const KNOWN: &[Cable] = &[
 /// The page to send people to. The vendor's own, never a mirror.
 pub const DOWNLOAD_PAGE: &str = "https://vb-audio.com/Cable/";
 
+/// The first line of [`missing_message`], and the way any other part of the program can tell "no
+/// cable" apart from the twenty other reasons starting the engine can fail. The tray needs that:
+/// this is the one failure it can offer to *fix*, rather than merely report.
+pub const MISSING_HEADLINE: &str = "No virtual audio cable is installed.";
+
+/// Whether an engine error is the missing-cable one.
+pub fn is_missing(error: &str) -> bool {
+    error.starts_with(MISSING_HEADLINE)
+}
+
 /// A cable that is actually installed on this machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
@@ -121,7 +131,7 @@ pub fn missing_message(devices: &[String]) -> String {
             .join("\n")
     };
     format!(
-        "No virtual audio cable is installed.\n\
+        "{MISSING_HEADLINE}\n\
          \n\
          Windows does not let a program invent a microphone - that needs a signed kernel driver.\n\
          Earshot therefore plays into a virtual cable, and you pick the other end of that cable as\n\
@@ -139,25 +149,125 @@ pub fn missing_message(devices: &[String]) -> String {
 
 /// The steps, once the download page is open. Written as what to click, not what to understand.
 ///
+/// Every line here is the answer to somebody actually getting it wrong:
+///
+/// - VB-Audio's page advertises five products on one screen. "Hi-Fi Cable & ASIO Bridge" is dated
+///   **2014** and sits near the top, so it reads as the safe, established choice; it is a different
+///   product and does not give you `CABLE Output`. Naming the file and the date is the only
+///   reliable way to point at the right button, because the buttons themselves are all called
+///   "Download".
+/// - The zip contains **two** installers, and the difference between them is not explained inside
+///   it. Picking the 32-bit one on 64-bit Windows fails in a way that looks like Earshot's fault.
+/// - Double-clicking the installer appears to work and then silently does not install the driver.
+///   It has to be "Run as administrator" — a driver cannot be installed any other way.
+///
 /// `pub` because it is one half of the guided path and the other half is Windows-only; keeping it
 /// private would make it dead code on every other platform.
 pub fn install_steps() -> String {
     format!(
-        "On the page that just opened:\n\n  \
-         1. Download the VB-CABLE driver pack (a .zip)\n  \
-         2. Unzip it anywhere\n  \
-         3. Right-click VBCABLE_Setup_x64.exe and choose \"Run as administrator\"\n  \
-         4. Click \"Install Driver\", then reboot if it asks\n\n\
+        "On the page that just opened:\n\
+         \n  \
+         1. Find the box titled \"VB-CABLE Driver Pack\" and click Download.\n     \
+            The file is  VBCABLE_Driver_Pack45.zip  and it is dated 2024.\n\
+         \n     \
+            Do NOT take \"Hi-Fi Cable & ASIO Bridge\" (dated 2014), \"VB-CABLE A+B\"\n     \
+            or \"C+D\". They are different products and none of them gives you the\n     \
+            'CABLE Output' microphone that Earshot needs.\n\
+         \n  \
+         2. Right-click the downloaded .zip, choose \"Extract All\", and open the\n     \
+            folder it makes.\n\
+         \n  \
+         3. There are two installers inside. Use the 64-bit one:\n\
+         \n       \
+              VBCABLE_Setup_x64.exe   <-- this one (any PC from the last 15 years)\n       \
+              VBCABLE_Setup.exe       <-- only for 32-bit Windows\n\
+         \n     \
+            Right-click it and choose \"Run as administrator\". Plain double-clicking\n     \
+            looks like it worked and installs nothing - Windows will not add a driver\n     \
+            without administrator rights.\n\
+         \n  \
+         4. Click \"Install Driver\" and accept the Windows security prompt.\n\
+         \n  \
+         5. Reboot if it asks. Then start Earshot again.\n\
+         \n\
          If the page did not open by itself, it is:  {DOWNLOAD_PAGE}"
     )
+}
+
+/// How to make the borrowed cable call itself something sensible.
+///
+/// This exists because of the single most common reaction to the Windows build: *my input is not
+/// called Earshot*. On Linux the device is ours and we name it; on Windows it is VB-Audio's, and
+/// the name in Discord's list is theirs. Renaming it is a supported, reversible thing Windows
+/// itself offers — but it is four clicks deep in a control panel that has been "legacy" for a
+/// decade, and nobody finds it by accident.
+///
+/// Earshot deliberately does **not** do this itself. The name lives in `HKLM`, so writing it would
+/// mean elevating in order to edit another vendor's driver state — for a cosmetic change, on a
+/// machine where the user can do it themselves in fifteen seconds. Opening the exact dialog and
+/// saying which box to type in is the whole of the value here, and none of the risk.
+pub fn rename_steps(current: &str) -> String {
+    format!(
+        "Windows will not let a program invent a microphone, so Earshot plays into a\n\
+         virtual cable that somebody else signed. That is why your input is called\n\
+         '{current}' and not 'Earshot'.\n\
+         \n\
+         You can rename it. Windows remembers it, and every application picks it up:\n\
+         \n  \
+         1. The Sound control panel is about to open on the Recording tab.\n  \
+         2. Right-click '{current}' and choose Properties.\n  \
+         3. On the General tab, type a new name in the box at the top - Earshot.\n  \
+         4. Click OK, then OK again.\n\
+         \n\
+         Discord and Zoom may need restarting before they show the new name.\n\
+         Nothing about Earshot changes: it is the same device either way."
+    )
+}
+
+/// The whole Windows setup, in the order it has to happen, short enough to fit in a message box.
+pub fn quickstart(capture: &str) -> String {
+    format!(
+        "1. On your phone, open the Earshot app and type the pairing code shown in\n   \
+            this menu. Then press Start.\n\
+         \n\
+         2. In Discord, Zoom, OBS or whatever you are using, open the microphone\n   \
+            list and pick:\n\
+         \n       \
+              {capture}\n\
+         \n   \
+            The names are back-to-front and this catches out everybody: the cable\n   \
+            has two ends, Earshot plays into 'CABLE Input', and the end you record\n   \
+            from is the other one. If your voice does not come through, you almost\n   \
+            certainly picked the Input.\n\
+         \n\
+         3. Talk. The tray icon turns green while audio is actually arriving; blue\n   \
+            means Earshot is ready but the phone has not sent anything yet.\n\
+         \n\
+         Blue forever, with the phone saying it is sending? That is Windows Firewall\n\
+         dropping the audio before it arrives. The Help entry in this menu has the\n\
+         one-line fix."
+    )
+}
+
+/// Hands the download page to whatever the user's default browser is.
+///
+/// `rundll32 url.dll,FileProtocolHandler` rather than `cmd /c start`: `start` needs an empty first
+/// argument to avoid treating a quoted URL as a window title, and Rust quotes every argument it
+/// passes, so that combination is fragile. This one takes the URL as a plain argument.
+#[cfg(target_os = "windows")]
+pub fn open_download_page() -> Result<(), String> {
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", DOWNLOAD_PAGE])
+        .status()
+        .map_err(|e| format!("could not open a browser: {e}"))?;
+    Ok(())
 }
 
 /// Everything below is the interactive path, which only makes sense on the platform that needs it.
 #[cfg(target_os = "windows")]
 mod interactive {
-    use super::{find, install_steps, missing_message, Found, DOWNLOAD_PAGE};
+    use super::{find, install_steps, missing_message, open_download_page, Found, DOWNLOAD_PAGE};
     use std::io::Write;
-    use std::process::Command;
     use std::time::{Duration, Instant};
 
     /// How long to keep looking after the user has been sent to the download page. Long enough to
@@ -165,20 +275,6 @@ mod interactive {
     /// can always Ctrl-C, and a decline is one keypress away before this starts.
     const WAIT: Duration = Duration::from_secs(15 * 60);
     const POLL: Duration = Duration::from_secs(3);
-
-    /// Hands the URL to whatever the user's default browser is.
-    ///
-    /// `rundll32 url.dll,FileProtocolHandler` rather than `cmd /c start`: `start` needs an empty
-    /// first argument to avoid treating a quoted URL as a window title, and Rust quotes every
-    /// argument it passes, so that combination is fragile. This one takes the URL as a plain
-    /// argument.
-    fn open_page() -> Result<(), String> {
-        Command::new("rundll32.exe")
-            .args(["url.dll,FileProtocolHandler", DOWNLOAD_PAGE])
-            .status()
-            .map_err(|e| format!("could not open a browser: {e}"))?;
-        Ok(())
-    }
 
     /// Reads one line. `Ok(None)` means there is nobody there to answer — piped input, or a
     /// service - which must be treated as "no", never as consent.
@@ -239,7 +335,7 @@ mod interactive {
                 .to_string());
         }
 
-        if let Err(e) = open_page() {
+        if let Err(e) = open_download_page() {
             println!("{e}");
         }
         println!();
@@ -347,6 +443,33 @@ mod tests {
     fn the_missing_message_copes_with_a_machine_that_has_no_outputs() {
         let msg = missing_message(&[]);
         assert!(msg.contains("no playback devices"));
+    }
+
+    /// The tray offers to fix exactly one kind of failure, and it tells them apart by this.
+    #[test]
+    fn a_missing_cable_is_recognisable_as_such() {
+        assert!(is_missing(&missing_message(&names(&["Speakers"]))));
+        assert!(is_missing(&missing_message(&[])));
+        assert!(!is_missing("cannot bind 0.0.0.0:47811: address already in use"));
+        assert!(!is_missing(""));
+    }
+
+    /// Two installers in the zip, five products on the page, and one of the wrong ones is dated
+    /// 2014 and looks like the safe choice. Every one of these strings is load-bearing; a rewrite
+    /// that drops one puts the reader back where they started.
+    #[test]
+    fn the_install_steps_disambiguate_both_traps() {
+        let steps = install_steps();
+        // The right download, by name and by date.
+        assert!(steps.contains("VBCABLE_Driver_Pack45.zip"), "{steps}");
+        assert!(steps.contains("2024"), "{steps}");
+        // The wrong one that looks right.
+        assert!(steps.contains("Hi-Fi Cable"), "{steps}");
+        assert!(steps.contains("2014"), "{steps}");
+        // Which of the two installers, and why the obvious way to run it fails.
+        assert!(steps.contains("VBCABLE_Setup_x64.exe"), "{steps}");
+        assert!(steps.contains("VBCABLE_Setup.exe"), "{steps}");
+        assert!(steps.contains("Run as administrator"), "{steps}");
     }
 
     /// Windows consoles are not reliably UTF-8: a Turkish or Western-European code page renders a

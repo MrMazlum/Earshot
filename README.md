@@ -7,10 +7,10 @@
 Free, open source, no ads, no account, no cloud. Everything stays on your home network.
 
 > ### 🚧 Early, but it works
-> On Linux, end to end: phone → Wi-Fi → PC, other applications select it as a microphone, and it has
-> been used in a real Discord call. Tested on **one phone and one laptop, by one person.** The
-> Windows build compiles and passes its tests in CI but has never been run by a human — see
-> [What works today](#what-works-today).
+> End to end on **Linux and Windows**: phone → Wi-Fi → PC, other applications select it as a
+> microphone, and it has been used in a real Discord call. Tested on **one phone and two PCs, by one
+> person** — see [What works today](#what-works-today). Nothing about the latency has been
+> *measured* yet, and nothing is claimed about it.
 
 ---
 
@@ -19,23 +19,108 @@ Free, open source, no ads, no account, no cloud. Everything stays on your home n
 | | File | Notes |
 |---|---|---|
 | 📱 **Android app** | [**earshot.apk**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot.apk) | sideload it — not on Play yet |
-| 🪟 **Windows receiver** | [**earshot-receiver-windows-x86_64.zip**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-windows-x86_64.zip) | also needs [VB-Cable](https://vb-audio.com/Cable/) — free, and Earshot walks you through it |
+| 🪟 **Windows receiver** | [**earshot-receiver-windows-x86_64.zip**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-windows-x86_64.zip) | also needs [VB-Cable](https://vb-audio.com/Cable/) — free, once, [and there is a right way to install it](#setup) |
 | 🐧 **Linux receiver** | [**earshot-receiver-linux-x86_64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-linux-x86_64.tar.gz) | nothing else to install |
 
 > ⚠️ These links only work once this repository is public and a release is tagged; until then they
 > 404 for anyone without access. CI builds all three on every push either way.
 
-## Quick start
+## Setup
 
-1. **Install the app** on your phone.
-2. **Run the receiver** on your PC.
-   - Windows: unzip it and double-click **`earshot.bat`**
-   - Linux: `./earshot-tray` for a tray icon, or `./earshot-receiver --virtual-mic` in a terminal
-3. **Type the nine-digit code** the PC shows into the app, and press Start.
-4. **Pick Earshot as your microphone** in Discord, OBS, Zoom, anything.
-   - Windows: the input to pick is called **`CABLE Output`**, not Earshot — see [below](#windows-and-the-virtual-cable)
+<details open>
+<summary><b>🪟 Windows</b> — four steps, once</summary>
 
-That's it. Nothing to configure, nothing to sign up for.
+**1. Install VB-Cable.** Windows will not let a program invent a microphone — that needs a driver
+signed by Microsoft — so Earshot borrows one. This is the only awkward part, and you do it once.
+
+Go to **[vb-audio.com/Cable](https://vb-audio.com/Cable/)** and find the box titled
+**"VB-CABLE Driver Pack"**. The file is `VBCABLE_Driver_Pack45.zip`, dated **2024**.
+
+> ⚠️ That page advertises five products at once. **Do not** take *Hi-Fi Cable & ASIO Bridge* — it is
+> dated **2014**, it sits near the top, and it looks like the safe established choice. It is a
+> different product. Skip *VB-CABLE A+B* and *C+D* too. You want the plain Driver Pack.
+
+Extract the zip. There are **two** installers inside, and nothing in the zip says which is which:
+
+| | |
+|---|---|
+| `VBCABLE_Setup_x64.exe` | **this one** — any PC from the last 15 years |
+| `VBCABLE_Setup.exe` | only for 32-bit Windows |
+
+**Right-click it → "Run as administrator".** Double-clicking it looks like it worked and installs
+nothing: Windows will not add a driver without administrator rights, and it does not tell you that.
+Then "Install Driver", accept the security prompt, reboot if it asks.
+
+**2. Run Earshot.** Unzip the release and double-click **`Earshot.exe`**. No window opens — a
+microphone icon appears next to the clock, and a notification shows your pairing code. You may have
+to click the `^` arrow to see the icon; drag it onto the taskbar to keep it there.
+
+| Icon | |
+|---|---|
+| ⚪ grey | stopped |
+| 🔵 blue | running, waiting for your phone |
+| 🟢 green | your voice is arriving right now |
+| 🔴 red | something is wrong — click it |
+
+**3. The phone.** Install the APK, type the nine digits, press Start. Android will warn you that the
+developer is unknown — [it's right, and here's how to get past it](#your-phone-will-warn-you).
+
+**4. Pick it in Discord.** In the microphone list choose **`CABLE Output`** — *not* `CABLE Input`.
+[Why it isn't called Earshot, and how to rename it.](#why-your-microphone-is-called-cable-output)
+
+The zip also has a `START HERE.txt` with all of the above, and the tray menu has
+*"How do I use this?"* and *"It is not working..."* entries with the same advice.
+
+</details>
+
+<details open>
+<summary><b>🐧 Linux</b> — two steps, nothing to install</summary>
+
+**1.** Extract the release and run `./earshot-tray`. A microphone icon appears in the tray with your
+pairing code in its menu. Or `./earshot-receiver --virtual-mic` if you want a terminal and live
+statistics.
+
+**2.** Install the APK on your phone, type the nine digits, press Start. In Discord, OBS or Zoom,
+pick **Earshot** in the input list.
+
+`./earshot-tray --install` copies it to `~/.local/bin` and starts it at every login; `--uninstall`
+undoes that. On GNOME the tray needs the AppIndicator extension, which Ubuntu enables by default.
+
+</details>
+
+### Your phone will warn you
+
+The app is not on the Play Store and is not signed by a registered developer, so Android says so —
+twice. That warning is correct, and it appears for every sideloaded app.
+
+1. **While downloading**, Chrome may say the file "may be harmful". Choose **Download anyway** /
+   **Keep**.
+2. **While installing**, Play Protect says *"Blocked by Play Protect"* or *"unknown developer"*. The
+   big obvious button is **Don't install**. Choose **More details → Install anyway**.
+
+If you would rather not take our word for it, the source is right here and
+`cd app && flutter build apk --release` produces the same thing.
+
+### Why your microphone is called `CABLE Output`
+
+Because it is VB-Audio's device, not ours. On Linux, Earshot creates its own input and calls it
+**Earshot**. On Windows it cannot: publishing an audio endpoint needs a kernel driver signed by
+Microsoft, so Earshot plays into a cable somebody else already signed.
+
+The two ends read backwards, which catches out everybody:
+
+| | |
+|---|---|
+| **CABLE Input** | a *playback* device. Earshot plays into it, and finds it by itself |
+| **CABLE Output** | a *recording* device. **This is the one you pick in Discord** |
+
+**You can rename it.** Click the Earshot tray icon → *"Rename this input to Earshot..."*. It opens
+the exact dialog for you and tells you which box to type in. Windows remembers the new name and
+every application picks it up (Discord may need restarting first).
+
+Earshot does not rename it for you on purpose: the name lives in `HKEY_LOCAL_MACHINE`, so writing it
+would mean elevating to administrator in order to edit another vendor's driver settings — for a
+cosmetic change you can make yourself in fifteen seconds.
 
 ## What it does
 
@@ -141,9 +226,9 @@ published here, or not claimed at all. It has not been measured, so it is not cl
 |---|---|---|
 | 📱 **Android app** | records, sends over Wi-Fi, pairs with a nine-digit code | no discovery — the code is typed, not found |
 | 💻 **PC receiver** | receives, survives loss and reordering, plays out or into a virtual mic | — |
-| 🖱️ **PC app** | tray icon with status, start/stop and start-at-login — no terminal | no window, no level meter |
+| 🖱️ **PC app** | tray icon on both platforms: pairing code, start/stop, start-at-login — no terminal | no window, no level meter |
 | 🐧 **Linux** | works, virtual microphone included (`--virtual-mic`) | — |
-| 🪟 **Windows** | builds and passes its tests on every push (CI, real Windows runner); finds VB-Cable and offers to install it | **never actually run by a human.** No tray icon — that is Linux-only |
+| 🪟 **Windows** | **works** — tested by hand 2026-07-30: audio arrives, VB-Cable path, tray icon | the input is VB-Audio's `CABLE Output` unless you rename it |
 | 🍎 **macOS** | nothing — never built, not in CI | not a priority. The code path exists: install BlackHole and use `--device` |
 
 **Also missing:** Opus compression (so it currently uses ~770 kbps instead of ~40), the PC → phone
@@ -152,28 +237,13 @@ direction, automatic discovery, and encryption. Those are the next steps, in tha
 The full plan, the decisions and the open questions live in a separate project notebook, not in this
 repo.
 
-## Windows and the virtual cable
-
-Windows cannot invent a microphone without a signed kernel driver, so Earshot borrows one. Install
-[VB-Cable](https://vb-audio.com/Cable/) once — free — and Earshot plays into it. If it isn't
-installed, Earshot says so, offers to open the download page, and then waits and carries on by
-itself once the cable appears.
-
-The names are back-to-front, which catches everyone out:
-
-| | |
-|---|---|
-| **CABLE Input** | a *playback* device. Earshot plays into it, and finds it by itself |
-| **CABLE Output** | a *recording* device. **This is the one you pick in Discord** |
-
-There is no tray icon on Windows yet, so `earshot.bat` leaves a console window open. Keep it.
-
 ## Troubleshooting
 
-**The app says it's sending, the PC says it's waiting.**
+**The app says it's sending, the tray icon stays blue.**
 On Windows this is almost always the firewall: it drops incoming UDP for a program with no rule, and
-the prompt that would have asked you needs an administrator. The receiver prints the fix after 25
-seconds of silence — in an Administrator PowerShell:
+the prompt that would have asked you needs an administrator, so it is often never shown at all. The
+tray's *"It is not working..."* entry has this, and the console receiver prints it after 25 seconds
+of silence. In an Administrator PowerShell:
 
 ```powershell
 New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow
@@ -190,8 +260,16 @@ VPN. Type the address and port into the app instead.
 **The code is for the wrong network.** A PC on both Ethernet and Wi-Fi gets a code for each; the
 receiver lists them all. Use the one for the network your phone is on.
 
-**Windows: it runs, but Discord hears silence.** Check you picked `CABLE Output` and not `CABLE
-Input`, and that both ends of the cable use the same format in Windows' Sound settings.
+**Windows: the icon is green, but Discord hears silence.** You picked `CABLE Input` instead of
+`CABLE Output`. If it is definitely the Output, check both ends of the cable are set to the same
+format in Windows' Sound settings.
+
+**Windows: the tray icon has disappeared.** Windows hides tray icons by default — click the `^`
+arrow next to the clock, then drag the microphone icon out onto the taskbar so it stays.
+
+**Windows: nothing happens when I double-click `Earshot.exe`.** It has no window by design; look
+next to the clock. If it is not there either, run `earshot-console.bat` instead, which keeps a
+terminal open and will say what went wrong.
 
 ## Run from source
 
@@ -214,7 +292,7 @@ With a real phone: `cd app && flutter build apk --release`, install it, type the
 Start.
 
 <details>
-<summary><b>As an actual microphone, and without a terminal (Linux)</b></summary>
+<summary><b>As an actual microphone, and without a terminal</b></summary>
 
 ```bash
 cargo run --release --bin earshot-receiver -- --virtual-mic
@@ -228,7 +306,8 @@ in this mode — the audio goes to the virtual device instead. It stays until yo
 cargo run --release --bin earshot-tray -- --install
 ```
 
-Puts a microphone icon in the system tray and starts it at every login. Click it for the pairing
+Puts a microphone icon in the system tray and starts it at every login — on Windows too, where the
+same binary ships as `Earshot.exe`. Click it for the pairing
 code, whether the phone is connected, and a start/stop switch. The icon changes when audio is
 arriving. `--uninstall` removes the login item.
 

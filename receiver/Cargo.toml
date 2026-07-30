@@ -27,9 +27,32 @@ if-addrs = "0.13"
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.2", optional = true }
 
+# The Windows tray, by hand. There is no `ksni` equivalent here: every crate that wraps the
+# notification area (`tray-icon`, `trayicon`) expects a GUI event loop — usually `winit` — which
+# this program does not otherwise have and would be a large dependency to acquire for one icon.
+# `windows-sys` is raw declarations only: no code, no runtime, no build script. It is already in
+# the dependency graph for this target, so it costs nothing extra to build.
+#
+# Only the modules actually called are enabled, so the rest is not even parsed.
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "0.59"
+optional = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",           # the tray icon, drawn into a DIB section
+    "Win32_System_DataExchange",    # copying the pairing code to the clipboard
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Registry",        # the start-at-login entry
+    "Win32_UI_Shell",               # Shell_NotifyIcon
+    "Win32_UI_WindowsAndMessaging",
+]
+
 [features]
 default = ["tray"]
-tray = ["dep:ksni"]
+# Each `dep:` is target-gated above, so this activates whichever one exists for the platform being
+# built and neither on, say, macOS.
+tray = ["dep:ksni", "dep:windows-sys"]
 
 [profile.release]
 opt-level = 3

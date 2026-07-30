@@ -9,13 +9,22 @@
 //! are in `CONTRIBUTING.md`.
 
 pub mod audio;
-#[cfg(all(feature = "tray", target_os = "linux"))]
+#[cfg(all(feature = "tray", any(target_os = "linux", target_os = "windows")))]
 pub mod autostart;
 pub mod cable;
 pub mod engine;
+/// The text every front-end shows when nothing is arriving. Shared so the Windows wording is
+/// testable on Linux.
+pub mod help;
 pub mod pairing;
 pub mod proto;
 pub mod reorder;
 pub mod resample;
 pub mod ring;
+/// What the tray shows, shared by both front-ends so the Windows text is testable on Linux.
+#[cfg(feature = "tray")]
+pub mod trayui;
 pub mod virtualmic;
+/// The Win32 notification area. Windows has no `ksni`, so this is hand-rolled.
+#[cfg(all(feature = "tray", target_os = "windows"))]
+pub mod wintray;

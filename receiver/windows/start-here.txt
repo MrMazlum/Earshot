@@ -1,0 +1,148 @@
+===============================================================================
+  EARSHOT  -  use your phone as your PC's microphone
+===============================================================================
+
+  There are two things to install, and you only do this once.
+
+  Windows will not let a program invent a microphone - that needs a driver
+  signed by Microsoft. So Earshot borrows one. That is the only reason step 1
+  exists, and it is the only awkward part of the whole thing.
+
+
+-------------------------------------------------------------------------------
+  STEP 1  -  Install VB-Cable  (free, once, about three minutes)
+-------------------------------------------------------------------------------
+
+  Go to:   https://vb-audio.com/Cable/
+
+  1. Find the box titled "VB-CABLE Driver Pack" and click Download.
+     The file is  VBCABLE_Driver_Pack45.zip  and it is dated 2024.
+
+     DO NOT take "Hi-Fi Cable & ASIO Bridge" - it is dated 2014, it sits
+     near the top of the page, and it is a completely different product.
+     Also skip "VB-CABLE A+B" and "C+D". You want the plain Driver Pack.
+
+  2. Right-click the downloaded .zip -> "Extract All" -> open the folder.
+
+  3. There are TWO installers in there. Use the 64-bit one:
+
+         VBCABLE_Setup_x64.exe    <-- THIS ONE (any PC from the last 15 years)
+         VBCABLE_Setup.exe        <-- only for 32-bit Windows
+
+     Right-click it -> "Run as administrator".
+
+     Double-clicking it looks like it works and installs nothing. Windows
+     will not add a driver without administrator rights, and it does not
+     tell you that.
+
+  4. Click "Install Driver", accept the Windows security prompt, and reboot
+     if it asks.
+
+
+-------------------------------------------------------------------------------
+  STEP 2  -  Run Earshot
+-------------------------------------------------------------------------------
+
+  Double-click   Earshot.exe
+
+  There is no window. A microphone icon appears in the notification area,
+  next to the clock - you may have to click the "^" arrow to see it, and you
+  can drag it out of there onto the taskbar so it stays visible.
+
+  A notification pops up with your PAIRING CODE: nine digits.
+  Lost it? Click the icon - it is in the menu, and clicking it copies it.
+
+  Icon colours:
+      grey    stopped
+      blue    running, waiting for your phone
+      green   your voice is arriving right now
+      red     something is wrong - click it
+
+
+-------------------------------------------------------------------------------
+  STEP 3  -  The phone
+-------------------------------------------------------------------------------
+
+  Install earshot.apk, open it, type the nine digits, press Start.
+
+  Your phone will warn you that the developer is unknown. It is right: this
+  app is not on the Play Store and is not signed by a registered developer.
+  You have to say yes twice:
+
+    - While downloading, Chrome may say the file "may be harmful".
+      Choose Download anyway / Keep.
+    - On installing, Play Protect says "Blocked by Play Protect" or
+      "unknown developer". The big obvious button is Don't install.
+      Choose  More details  ->  Install anyway.
+
+  This is what sideloading any app outside the Play Store looks like. If you
+  would rather not, the source is public and you can build it yourself.
+
+
+-------------------------------------------------------------------------------
+  STEP 4  -  Pick it in Discord / Zoom / OBS
+-------------------------------------------------------------------------------
+
+  In the microphone list, choose:
+
+       CABLE Output  (VB-Audio Virtual Cable)
+
+  NOT "CABLE Input". The cable has two ends. Earshot plays into the Input;
+  you record from the Output. Everybody gets this wrong once.
+
+  It is not called "Earshot" because the device is VB-Audio's, not ours.
+  You can rename it: click the Earshot tray icon and choose
+  "Rename this input to Earshot..." - it opens the right dialog for you.
+
+
+-------------------------------------------------------------------------------
+  IT IS NOT WORKING
+-------------------------------------------------------------------------------
+
+  The phone says it is sending and the tray icon stays blue.
+
+    Nine times out of ten this is Windows Firewall. It silently drops
+    incoming UDP for a program that has no rule, and the prompt that would
+    have asked you needs an administrator - so it is often never shown.
+
+    Right-click Start -> "Terminal (Admin)" or "Windows PowerShell (Admin)",
+    then paste this one line:
+
+New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow
+
+    Then check this network is set to Private, not Public, in Windows
+    settings. Public turns on the firewall's strictest profile.
+
+  Discord hears silence, but the icon is green.
+
+    You picked CABLE Input instead of CABLE Output. See step 4.
+
+  Still nothing.
+
+    Guest Wi-Fi and "client isolation" block device-to-device traffic
+    outright, and no firewall rule will help. Turn on your phone's hotspot,
+    join this PC to it, and try again - that rules it out in a minute.
+
+  The tray icon has vanished.
+
+    Windows hides tray icons by default. Click the "^" arrow next to the
+    clock, then drag the microphone icon out onto the taskbar.
+
+  The menu also has "How do I use this?" and "It is not working..." entries
+  with the same advice, so you do not need this file to hand.
+
+
+-------------------------------------------------------------------------------
+  THE OTHER FILES
+-------------------------------------------------------------------------------
+
+  Earshot.exe            The tray application. This is the one you want.
+  earshot-receiver.exe   The same thing in a console window, with live
+                         statistics. Useful when something is wrong.
+  earshot-console.bat    Double-click to run the above with the right
+                         options.
+  LICENSE                GPL-3.0. It is free software; the source is at
+                         https://github.com/MrMazlum/Earshot
+
+  Nothing here phones home, collects anything, or talks to the internet at
+  all. Audio never leaves your own network.
