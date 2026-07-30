@@ -1,6 +1,6 @@
 [package]
 name = "earshot-receiver"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 # Ubuntu 24.04 ships Rust 1.75 and that is what is actually installed on the dev laptop. Keep this
 # pinned so a newer-only API fails at compile time here, rather than on the owner's machine.
