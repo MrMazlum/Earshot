@@ -126,6 +126,10 @@ class _SessionPageState extends State<SessionPage> {
   int _actualRate = 0;
   String? _error;
 
+  /// True when the microphone was refused permanently, so the error needs a way out rather than
+  /// an instruction to try again.
+  bool _permissionBlocked = false;
+
   @override
   void initState() {
     super.initState();
@@ -223,10 +227,21 @@ class _SessionPageState extends State<SessionPage> {
     final granted =
         await _control.invokeMethod<bool>('requestPermissions') ?? false;
     if (!granted) {
-      setState(() =>
-          _error = 'Allow the microphone permission, then press Start again.');
+      // Two refusals and Android stops showing the dialog at all, so "press Start again" would be
+      // advice that can never work. Offer the settings page instead, which is the only way back.
+      final state =
+          await _control.invokeMethod<String>('micPermissionState') ?? 'askable';
+      if (!mounted) return;
+      setState(() {
+        _permissionBlocked = state == 'blocked';
+        _error = _permissionBlocked
+            ? 'Android will not ask again, because the microphone was refused '
+                'earlier. Turn it on in the app settings.'
+            : 'Allow the microphone permission, then press Start again.';
+      });
       return;
     }
+    if (_permissionBlocked) setState(() => _permissionBlocked = false);
 
     final args = {
       'host': target.host,
@@ -394,6 +409,9 @@ class _SessionPageState extends State<SessionPage> {
         running: _running,
         error: _error,
         onPressed: _toggle,
+        onOpenSettings: _permissionBlocked
+            ? () => _control.invokeMethod('openAppSettings')
+            : null,
       ),
     );
   }
@@ -723,10 +741,14 @@ class _ActionBar extends StatelessWidget {
   final bool running;
   final String? error;
   final VoidCallback onPressed;
+
+  /// Only set when the error is one the user cannot clear from inside the app.
+  final VoidCallback? onOpenSettings;
   const _ActionBar({
     required this.running,
     required this.error,
     required this.onPressed,
+    this.onOpenSettings,
   });
 
   @override
@@ -758,10 +780,29 @@ class _ActionBar extends StatelessWidget {
                     color: theme.colorScheme.errorContainer,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text(
-                    error!,
-                    style:
-                        TextStyle(color: theme.colorScheme.onErrorContainer),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        error!,
+                        style: TextStyle(
+                            color: theme.colorScheme.onErrorContainer),
+                      ),
+                      if (onOpenSettings != null) ...[
+                        const SizedBox(height: 4),
+                        TextButton.icon(
+                          onPressed: onOpenSettings,
+                          icon: const Icon(Icons.settings_outlined, size: 18),
+                          label: const Text('Open app settings'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: theme.colorScheme.onErrorContainer,
+                            padding: EdgeInsets.zero,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 12),

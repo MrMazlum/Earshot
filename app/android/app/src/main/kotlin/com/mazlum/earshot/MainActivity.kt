@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -19,6 +21,8 @@ class MainActivity : FlutterActivity() {
         const val EVENT_CHANNEL = "earshot/events"
         const val PREFS = "earshot_prefs"
         const val PERM_REQUEST = 4711
+        /** Whether the microphone prompt has ever been shown. See [micPermissionState]. */
+        const val ASKED_MIC = "asked_mic"
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -41,6 +45,16 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "requestPermissions" -> result.success(requestNeededPermissions())
                     "hasPermissions" -> result.success(hasMicPermission())
+                    "micPermissionState" -> result.success(micPermissionState())
+                    "openAppSettings" -> {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", packageName, null)
+                            )
+                        )
+                        result.success(true)
+                    }
                     "isRunning" -> result.success(Bus.running)
 
                     "start" -> {
@@ -101,10 +115,36 @@ class MainActivity : FlutterActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
+    /**
+     * "granted", "askable", or "blocked".
+     *
+     * "blocked" is the case worth having a name for: after two refusals Android stops showing the
+     * dialog at all, so `requestPermissions` returns without anything appearing on screen. Telling
+     * someone to "press Start again" then is advice that can never work, and the only way out is
+     * the system settings page.
+     *
+     * `shouldShowRequestPermissionRationale` is false both before the first ask *and* after a
+     * permanent refusal, so it cannot tell those apart by itself. Hence the stored flag.
+     */
+    private fun micPermissionState(): String = when {
+        hasMicPermission() -> "granted"
+        ActivityCompat.shouldShowRequestPermissionRationale(
+            this, Manifest.permission.RECORD_AUDIO
+        ) -> "askable"
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ASKED_MIC, false) -> "blocked"
+        else -> "askable"
+    }
+
     /** Returns true if everything is already granted; otherwise fires the system prompts. */
     private fun requestNeededPermissions(): Boolean {
         val wanted = mutableListOf<String>()
-        if (!hasMicPermission()) wanted += Manifest.permission.RECORD_AUDIO
+        if (!hasMicPermission()) {
+            wanted += Manifest.permission.RECORD_AUDIO
+            // Remembered before the prompt, not after: whether it was granted is a separate
+            // question, and this only records that the system has had its one chance to ask.
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(ASKED_MIC, true).apply()
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED

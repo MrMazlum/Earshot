@@ -1,6 +1,6 @@
 # Earshot
 
-**Use your phone as your PC's microphone and headphones — over Wi-Fi.**
+**Use your phone as your PC's microphone — over Wi-Fi.**
 
 <img src="docs/icon.png" alt="" width="88" align="right">
 
@@ -43,20 +43,19 @@ That's it. Nothing to configure, nothing to sign up for.
    YOU SPEAK
        ↓
    📱 phone mic  →  noise removal  →  Wi-Fi  →  💻 PC  →  "microphone"  →  Discord
-                                                  ↑                          ↓
-   🎧 your headset  ←  📱 phone  ←  Wi-Fi  ←──────┴───────────────  the call's audio
 ```
 
 | Where | What | Job |
 |---|---|---|
-| 📱 Your phone | the **Earshot app** | listens to your voice, compresses it, sends it |
+| 📱 Your phone | the **Earshot app** | listens to your voice and sends it |
 | 💻 Your PC | a **small background program** | receives it and hands it to Windows/Linux as a normal microphone |
 
 Discord, Steam, OBS and everything else just see "a microphone" in their dropdown. They never know
 it's your phone.
 
-It works the other way round too: the PC's sound goes back to the phone, so you plug your headset
-into the **phone** and one device does both. No wires to the PC at all.
+**Planned, and not built yet:** the return direction, so the call's audio goes back to the phone and
+you plug your headset into the **phone** instead — one device for both, no wires to the PC at all.
+Today Earshot is a microphone only, and the sound still comes out of whatever the PC uses now.
 
 <details>
 <summary><b>Why bother? (the problem this solves)</b></summary>
@@ -112,10 +111,13 @@ Voice chat is unusable if your words arrive late. So:
   sound like a drive-thru speaker on a Bluetooth headset
 - **Speed over perfection.** Audio lost on the way is skipped, never resent. Waiting for it would
   make you fall further and further behind
-- **Opus**, the same codec Discord uses, at about 4 KB per second
+- **Small, fixed buffers**, and the delay they cost is on screen while it runs, in milliseconds
+
+Compression is the gap: it currently sends raw audio at about 770 kbps. **Opus** — the same codec
+Discord uses, at roughly 4 KB per second — is the next thing to land, and it is not in yet.
 
 **Target: under 100 ms** from your mouth to the other person's ear. That will be *measured* and
-published here, or not claimed at all.
+published here, or not claimed at all. It has not been measured, so it is not claimed.
 
 ## The honest parts
 
