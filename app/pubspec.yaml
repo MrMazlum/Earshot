@@ -6,7 +6,7 @@ publish_to: "none"
 
 # version+build. The number after the `+` is Android's versionCode: bump it on every release, or
 # the new APK will refuse to install over the old one.
-version: 0.1.1+2
+version: 0.1.2+3
 
 environment:
   sdk: ^3.10.7
