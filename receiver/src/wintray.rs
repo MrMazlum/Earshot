@@ -20,8 +20,11 @@
 //!
 //! - **`TPM_RETURNCMD`.** `TrackPopupMenu` normally posts `WM_COMMAND` back into the window
 //!   procedure *while the menu is still up*, which means re-entering the state that built the menu.
-//!   Asking for the command as a return value instead makes the whole interaction linear, and the
-//!   `RefCell` below can never be borrowed twice.
+//!   Asking for the command as a return value instead makes the whole interaction linear.
+//! - **`with_app` borrows fallibly.** That is not defensiveness. `TrackPopupMenu` and `MessageBoxW`
+//!   each run a modal message loop of their own, so the one-second `WM_TIMER` is dispatched into
+//!   this window procedure *while a click is still being handled* — and a `RefCell` meets that by
+//!   panicking. Re-entrant messages are skipped instead.
 //! - **A real window, not `HWND_MESSAGE`.** Message-only windows do not receive broadcasts, and
 //!   `TaskbarCreated` — sent to every top-level window when Explorer restarts — is a broadcast. Miss
 //!   it and the icon vanishes for the rest of the session the first time Explorer crashes.
@@ -633,9 +636,26 @@ fn make_icon(size: i32, state: State) -> HICON {
 /// `unsafe` and cannot trip the `static_mut_refs` lint on a newer compiler than the one here.
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
+/// Runs `f` with the application, unless we are already inside a handler.
+///
+/// **Every `APP` access goes through here, and the fallible borrow is the whole point.**
+/// `TrackPopupMenu` and `MessageBoxW` each run their *own* modal message loop, which dispatches
+/// straight back into this window procedure while the outer handler is still on the stack. So a
+/// `WM_TIMER` arriving one second into an open menu, or while a message box is up, re-enters an
+/// arm that is already holding the borrow — and `RefCell` answers that by panicking, taking the
+/// tray down with it.
+///
+/// Skipping is the right answer rather than a lesser evil: the timer only refreshes gauges, and
+/// there will be another along in a second. A click that lands while a dialog is open was never
+/// going to be actionable either.
+fn with_app<T>(f: impl FnOnce(&mut App) -> T) -> Option<T> {
+    APP.with(|a| match a.try_borrow_mut() {
+        Ok(mut slot) => slot.as_mut().map(f),
+        Err(_) => None,
+    })
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    // Re-entering the borrow is what `TPM_RETURNCMD` exists to prevent; every arm below either
-    // finishes its borrow before doing anything that pumps messages, or takes a fresh one.
     match msg {
         WM_TRAYICON => {
             let click = lp as u32;
@@ -643,24 +663,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // sequence, so the first up would already have opened the menu and the double-click
             // would land behind it. The menu's own top line shows the details instead.
             if click == WM_LBUTTONUP || click == WM_RBUTTONUP {
-                // Build and track the menu without holding the borrow across the click handler.
-                let chosen = APP.with(|a| a.borrow().as_ref().map(|app| app.popup()).unwrap_or(0));
+                // Two separate borrows, not one held across both: `popup` blocks inside
+                // `TrackPopupMenu` until the user chooses, and holding the borrow for those
+                // seconds would make every timer tick in the meantime a no-op.
+                let chosen = with_app(|app| app.popup()).unwrap_or(0);
                 if chosen != 0 {
-                    APP.with(|a| {
-                        if let Some(app) = a.borrow_mut().as_mut() {
-                            app.handle(chosen);
-                        }
-                    });
+                    with_app(|app| app.handle(chosen));
                 }
             }
             0
         }
         WM_TIMER if wp == TIMER_ID => {
-            APP.with(|a| {
-                if let Some(app) = a.borrow_mut().as_mut() {
-                    app.refresh();
-                    app.redraw();
-                }
+            with_app(|app| {
+                app.refresh();
+                app.redraw();
             });
             0
         }
@@ -674,11 +690,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             0
         }
         _ if msg != 0 && msg == TASKBAR_CREATED.load(Ordering::Relaxed) => {
-            APP.with(|a| {
-                if let Some(app) = a.borrow_mut().as_mut() {
-                    app.add_icon();
-                }
-            });
+            with_app(|app| app.add_icon());
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
