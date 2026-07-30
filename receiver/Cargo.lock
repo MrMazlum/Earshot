@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "earshot-receiver"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cpal",
  "if-addrs",
