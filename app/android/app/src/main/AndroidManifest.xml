@@ -1,20 +1,31 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Earshot needs the microphone, the local network, and a foreground service to keep
-         holding the mic while the screen is off. Nothing here reaches the internet:
-         see ~/EarshotBrain/Rules/lan-only-no-telemetry.md -->
+    <!-- Earshot needs the microphone, the local network, and a foreground service to keep holding
+         the mic while the screen is off.
+
+         INTERNET is the permission Android requires for *any* socket, including a UDP socket to a
+         machine on your own Wi-Fi. Earshot opens exactly one, to the address you typed. There is
+         no analytics, no crash reporting and no remote config anywhere in this app. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- ACCESS_WIFI_STATE + WAKE_LOCK are for the Wi-Fi lock MicService takes while streaming,
+         which stops the radio dropping into a power-saving mode that adds jitter. There is
+         deliberately no CHANGE_WIFI_MULTICAST_STATE: there is no discovery yet, so nothing here
+         listens for multicast, and a permission that is asked for but unused is a permission that
+         should not be asked for. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- allowBackup="false" on purpose. The only thing this app stores is the address of a PC on
+         your home network; with backup on, Android copies that to Google's servers. Small, but the
+         README promises nothing leaves your network, and this is the one place it quietly would. -->
     <application
         android:label="Earshot"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round">
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -78,7 +78,8 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
   Wi-Fi can talk to, and the receiver used to print exactly that. `is_lan_candidate` in `engine.rs`
   is the rule, and its tests name the cases
 
-Design notes: `~/EarshotBrain/` — start with `06-Latency-Budget.md` and `05-Wire-Protocol.md`.
+The wire format is specified in [`../protocol/README.md`](../protocol/README.md); the rules every
+change here has to obey are in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## On Windows
 

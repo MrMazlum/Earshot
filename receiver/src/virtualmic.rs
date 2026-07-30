@@ -1,8 +1,7 @@
 //! The virtual microphone: making other applications see Earshot as an input device.
 //!
-//! This is the step that turns the project from a demo into something usable —
-//! `~/EarshotBrain/07-PC-Integration.md`. The two platforms do genuinely different things, and the
-//! difference is not cosmetic:
+//! This is the step that turns the project from a demo into something usable. The two platforms do
+//! genuinely different things, and the difference is not cosmetic:
 //!
 //! - **Linux** can be *asked* to invent a device. A null sink plus a remapped source costs two
 //!   `pactl` calls, no driver, no root, no third-party install.

@@ -1,11 +1,11 @@
 //! Sound-card output via cpal (PipeWire/ALSA on Linux, WASAPI on Windows, CoreAudio on macOS).
 //!
-//! P1 plays into whatever the default output device is, so the owner can hear his own voice
-//! (`~/EarshotBrain/MASTER_ROADMAP.md`, P1 exit gate). Routing into a *virtual microphone* so
-//! Discord sees it is P3 — `~/EarshotBrain/07-PC-Integration.md`.
+//! By default this plays into whatever the system output device is, which is how you hear your own
+//! voice and confirm the whole chain works. Routing into a *virtual microphone* instead, so Discord
+//! sees it as an input, is [`crate::virtualmic`].
 //!
-//! Everything in the callback obeys `~/EarshotBrain/Rules/no-blocking-audio-thread.md`: no locks,
-//! no allocation, no logging. It reads a lock-free ring and nothing else.
+//! The callback obeys the audio-thread rule in `CONTRIBUTING.md`: no locks, no allocation, no
+//! logging, no I/O. It reads a lock-free ring and nothing else.
 
 use crate::ring::SpscRing;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -23,6 +23,8 @@ pub struct OutputStats {
     pub samples_played: AtomicU64,
     /// False while we are filling the buffer before starting to play.
     pub primed: AtomicBool,
+    /// Samples thrown away because the buffer had drifted far above its target. See [`fill`].
+    pub trimmed: AtomicU64,
 }
 
 pub struct Output {
@@ -38,7 +40,7 @@ pub struct Output {
 
 impl Output {
     /// Milliseconds of audio currently sitting in the ring — the buffering part of the latency
-    /// budget, live. See `~/EarshotBrain/06-Latency-Budget.md`.
+    /// budget, live. A level that keeps climbing is clock drift, not jitter.
     pub fn buffered_ms(&self) -> f32 {
         self.ring.len() as f32 * 1000.0 / self.sample_rate as f32
     }
@@ -157,6 +159,28 @@ pub fn open(device_name: Option<&str>, buffer_ms: u32) -> Result<Output, String>
     })
 }
 
+/// Once the buffer has grown past this many times the target, it is not jitter any more.
+///
+/// A ceiling, not a correction, and one that should never fire in ordinary use. What is measured:
+/// on this machine (48 kHz stream into a 44.1 kHz card, `earshot-testsend`, 2026-07-30), the ring
+/// level **wanders** rather than climbing — 55-95 ms on a clean stream, 58-170 ms with 5% loss and
+/// 25 ms of jitter, over 40-second runs. It goes up after an underrun, because re-priming refills
+/// the buffer from whatever has piled up in the meantime, and it comes back down again. Nothing in
+/// those runs came close to this ceiling.
+///
+/// It exists because the two ends are two independent crystals and the resampler here converts by a
+/// *fixed* ratio, so it cannot track a difference between them. A steady error in one direction has
+/// nothing to stop it, and the failure it would produce is the nastiest kind: no dropout, no
+/// warning, just every word arriving progressively later until the ring is full and the call is
+/// unusable. Capping that costs one short discontinuity when it happens, and the count says so.
+///
+/// The cure is a resampler whose ratio is nudged continuously to track the drift. That is real work
+/// and is not done. If `trimmed` is ever seen climbing steadily on real hardware, this is the
+/// evidence that it needs doing — and that is precisely why the counter is on the stats line.
+const DRIFT_CEILING: usize = 4;
+/// What to trim back down to: high enough that the next callback is not an instant underrun.
+const DRIFT_TARGET: usize = 2;
+
 /// The callback body, shared by every sample format.
 ///
 /// Mono in, N channels out: the same sample goes to every channel.
@@ -181,6 +205,12 @@ fn fill<T: Copy>(
             return;
         }
         stats.primed.store(true, Ordering::Release);
+    }
+
+    // Clock drift, bounded. Allocation-free and O(1): `discard` only moves an index.
+    if prime_samples > 0 && ring.len() > prime_samples * DRIFT_CEILING {
+        let dropped = ring.discard(ring.len() - prime_samples * DRIFT_TARGET);
+        stats.trimmed.fetch_add(dropped as u64, Ordering::Relaxed);
     }
 
     let got = ring.pop(&mut scratch[..frames]);

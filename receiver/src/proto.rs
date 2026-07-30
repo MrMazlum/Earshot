@@ -1,8 +1,8 @@
 //! The Earshot wire format.
 //!
 //! MUST stay byte-identical to the Android side (`app/android/.../Protocol.kt`).
-//! Source of truth: `~/EarshotBrain/05-Wire-Protocol.md` §4 — change there first, then both ends,
-//! in the same commit, with a version bump.
+//! Specified in `protocol/README.md` — change that first, then both ends, in the same commit,
+//! with a version bump.
 
 pub const MAGIC: [u8; 2] = [0x45, 0x53]; // 'E' 'S'
 pub const VERSION: u8 = 1;
@@ -12,7 +12,7 @@ pub const FRAME_MS: u32 = 20;
 pub const TYPE_OPUS: u8 = 0;
 pub const TYPE_DTX: u8 = 1;
 pub const TYPE_KEEPALIVE: u8 = 2;
-/// Raw s16le mono. Dev builds only — never a release. See 05-Wire-Protocol.md §4.1.
+/// Raw s16le mono, and what ships today. Roughly 770 kbps; Opus replaces it.
 pub const TYPE_PCM_DEBUG: u8 = 3;
 
 pub const FLAG_FEC: u8 = 0x01;

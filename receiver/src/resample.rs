@@ -1,12 +1,13 @@
 //! Linear resampling, phone rate → sound-card rate.
 //!
-//! Needed because the good `AudioSource` values on Android may force 16 kHz
-//! (`~/EarshotBrain/Concepts/audio-pipeline.md` §The AudioSource trap) while PC output is almost
-//! always 48 kHz.
+//! Needed because the noise-cancelled `AudioSource` values on Android may only offer 16 kHz, while
+//! PC output is almost always 48 kHz.
 //!
 //! Linear interpolation is not the nicest-sounding resampler, but it is cheap, allocation-free and
-//! has no latency of its own. Real clock-drift correction — the slow, continuous kind described in
-//! `~/EarshotBrain/Concepts/clock-drift-and-resampling.md` — is P5, not this.
+//! has no latency of its own. This corrects a *fixed* rate difference only. Correcting **clock
+//! drift** — the two crystals running at very slightly different speeds, which shows up as a ring
+//! level that creeps in one direction over minutes — needs a ratio that is nudged continuously, and
+//! is not implemented yet.
 
 /// Each call works on the virtual array `[prev, input[0] … input[len-1]]`, so index 0 is the last
 /// sample of the *previous* block. Positions therefore run over `0 .. len`, and the carried

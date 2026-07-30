@@ -35,9 +35,3 @@ local.config.*
 .vscode/
 .DS_Store
 *.swp
-
-# Local agent/assistant config — kept out of the published tree.
-# CLAUDE.md stays on disk for local tooling; CONTRIBUTING.md is the version that ships.
-.claude/
-.agents/
-CLAUDE.md

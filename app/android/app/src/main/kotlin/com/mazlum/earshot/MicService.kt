@@ -26,8 +26,9 @@ import kotlin.random.Random
  * A foreground service because Android will not let a backgrounded app hold the mic, and because
  * the user must always be able to see that something is listening.
  *
- * Phase P1: raw PCM (Protocol.TYPE_PCM_DEBUG). Opus comes next — see ~/EarshotBrain/MASTER_ROADMAP.md.
- * Rule that governs this file: ~/EarshotBrain/Rules/no-blocking-audio-thread.md. The read loop does
+ * Raw PCM for now (Protocol.TYPE_PCM_DEBUG); Opus comes next.
+ *
+ * The rule that governs this file is the audio-thread rule in CONTRIBUTING.md: the read loop does
  * capture → header → send and nothing else. No logging, no allocation per frame, no UI work.
  */
 class MicService : Service() {
@@ -225,7 +226,7 @@ class MicService : Service() {
         )
         if (minBuf <= 0) return null
         // Four frames of headroom: enough to survive a scheduling hiccup, small enough to stay
-        // inside the latency budget (~06-Latency-Budget.md stage 1).
+        // inside the latency budget - 4 x 20 ms is 80 ms if it ever actually fills.
         val bufSize = maxOf(minBuf, Protocol.frameSamples(rate) * 2 * 4)
         return try {
             val r = AudioRecord(source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize)

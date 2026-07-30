@@ -4,11 +4,9 @@
 //! reports gaps so the caller can conceal them. The delay itself lives in the ring
 //! (`ring.rs`); this only decides *what* comes out and *when it is too late to matter*.
 //!
-//! Rules it implements, from `~/EarshotBrain/Rules/udp-not-tcp.md`:
+//! Two rules, both from "audio is never retransmitted" (`protocol/README.md`):
 //!   - a packet that arrives after its slot has already played is **discarded, never played late**
 //!   - gaps are declared, never waited for indefinitely
-//!
-//! Full design notes: `~/EarshotBrain/Concepts/jitter-buffer.md`.
 
 use crate::proto::seq_diff;
 use std::collections::BTreeMap;
@@ -34,6 +32,21 @@ pub struct ReorderStats {
 /// Consecutive too-late packets that mean "this is a new stream, not a straggler". 25 frames is
 /// half a second — long enough that ordinary reordering never reaches it.
 const RESYNC_AFTER: u32 = 25;
+
+/// How far ahead of the playhead a sequence number may be before it stops being "a gap" and starts
+/// being "a different stream". 50 frames is one second.
+///
+/// This bound is load-bearing, and not only for tidiness. [`Reorder::pop`] fills a gap by declaring
+/// every missing sequence lost, **one at a time**, and the caller turns each one into a frame of
+/// concealment silence. Without a cap, a single datagram claiming a sequence far in the future —
+/// which anyone on the LAN can send, and which a `u32` lets reach two billion — would make the
+/// receive thread sit in that loop for hours. A malformed 16-byte header should not be able to do
+/// that.
+///
+/// It is also the right behaviour for the honest case. A Wi-Fi dropout of several seconds leaves a
+/// gap of hundreds of frames; concealing all of them would push seconds of silence into the ring
+/// and put the audio permanently behind. Jumping to the new sequence resumes at once instead.
+const MAX_AHEAD: i64 = 50;
 
 pub struct Reorder {
     slots: BTreeMap<u32, Vec<u8>>,
@@ -82,7 +95,18 @@ impl Reorder {
         }
 
         let playhead = self.playhead.unwrap_or(sequence);
-        if seq_diff(sequence, playhead) < 0 {
+        let ahead = seq_diff(sequence, playhead);
+
+        // Too far ahead to be a gap in this stream. Jump to it rather than concealing every
+        // sequence in between, one frame at a time, for as long as that takes.
+        if ahead > MAX_AHEAD {
+            self.reset_to(ssrc, sequence);
+            self.slots.insert(sequence, payload.to_vec());
+            self.stats.accepted += 1;
+            return;
+        }
+
+        if ahead < 0 {
             self.stats.too_late += 1;
             self.behind_streak += 1;
             // A single old packet is a straggler. A steady run of them means the sender restarted
@@ -232,6 +256,91 @@ mod tests {
         }
         assert!(heard_again, "audio never resumed after the restart");
         assert_eq!(r.stats.resets, 1);
+    }
+
+    /// The packets that used to hang the receive thread.
+    ///
+    /// `pop` declares one loss per missing sequence, and only starts doing so once the backlog is
+    /// deeper than `depth`. So a handful of datagrams claiming sequences two billion ahead — which
+    /// anyone on the LAN can send, and which need no reply and no reachable port of their own —
+    /// used to put the caller in that loop for something over two billion iterations, each one
+    /// pushing a frame of silence. No crash, no over-read, just a receiver that never speaks again.
+    #[test]
+    fn sequence_numbers_from_the_far_future_cannot_stall_the_loop() {
+        let depth = 3;
+        let mut r = Reorder::new(depth);
+        r.push(S, 0, &frame(0));
+        assert_eq!(r.pop(), Some(Release::Frame(frame(0))));
+
+        // Enough of them to push the backlog past `depth`, which is what arms the loop.
+        for i in 0..(depth as u32 + 2) {
+            r.push(S, 2_000_000_000 + i, &frame(7));
+        }
+
+        // Bounded work, and the audio carries on from the new position.
+        let mut releases = 0;
+        while let Some(release) = r.pop() {
+            releases += 1;
+            assert!(releases < 100, "pop is still declaring losses after {releases}");
+            if let Release::Frame(f) = release {
+                assert_eq!(f, frame(7));
+            }
+        }
+        assert_eq!(releases, depth + 2, "every frame should have come out");
+        assert_eq!(r.stats.resets, 1, "the jump should resync, not conceal");
+    }
+
+    /// The same bound, arrived at honestly: a Wi-Fi dropout leaves a gap of hundreds of frames.
+    /// Concealing every one of them would push seconds of silence into the ring and leave the call
+    /// permanently behind, so the receiver skips to the live edge instead.
+    #[test]
+    fn a_long_dropout_resumes_at_the_live_edge_rather_than_concealing_all_of_it() {
+        let mut r = Reorder::new(3);
+        r.push(S, 0, &frame(0));
+        assert_eq!(r.pop(), Some(Release::Frame(frame(0))));
+
+        r.push(S, 500, &frame(5)); // ten seconds later
+        let mut lost = 0;
+        while let Some(release) = r.pop() {
+            if matches!(release, Release::Lost(_)) {
+                lost += 1;
+            }
+        }
+        assert_eq!(lost, 0, "concealed {lost} frames instead of skipping");
+        assert!(r.held() == 0);
+    }
+
+    /// The bound must not eat an ordinary gap. A handful of dropped packets on a busy Wi-Fi is
+    /// exactly what concealment is for, and resyncing past it would be wrong.
+    #[test]
+    fn an_ordinary_gap_is_still_concealed_frame_by_frame() {
+        let mut r = Reorder::new(2);
+        r.push(S, 0, &frame(0));
+        assert_eq!(r.pop(), Some(Release::Frame(frame(0))));
+
+        // 1..=5 are lost; 6, 7, 8 arrive.
+        for seq in 6..=8 {
+            r.push(S, seq, &frame(6));
+        }
+        let mut lost = 0;
+        while let Some(release) = r.pop() {
+            if matches!(release, Release::Lost(_)) {
+                lost += 1;
+            }
+        }
+        assert_eq!(lost, 5, "the five missing frames should each be concealed");
+        assert_eq!(r.stats.resets, 0, "a five-frame gap is not a new stream");
+    }
+
+    /// Whatever a sender does, the held set stays small enough to be irrelevant to memory.
+    #[test]
+    fn a_flood_of_scattered_sequences_cannot_grow_the_held_set() {
+        let mut r = Reorder::new(16);
+        r.push(S, 0, &frame(0));
+        for seq in (0..u32::MAX).step_by(7_919_311).take(400) {
+            r.push(S, seq, &frame(1));
+            assert!(r.held() <= MAX_AHEAD as usize + 1, "holding {}", r.held());
+        }
     }
 
     #[test]

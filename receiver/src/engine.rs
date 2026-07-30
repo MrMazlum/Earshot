@@ -86,6 +86,9 @@ pub struct Status {
     pub underruns: AtomicU64,
     pub ring_drops: AtomicU64,
     pub rejected: AtomicU64,
+    /// Samples dropped to stop clock drift turning into unbounded latency. A steadily rising count
+    /// means the two clocks disagree; a zero means they do not.
+    pub trimmed: AtomicU64,
     peer: Mutex<Option<SocketAddr>>,
     notices: Mutex<Vec<String>>,
     fatal: Mutex<Option<String>>,
@@ -316,8 +319,9 @@ pub fn lan_ip() -> Option<IpAddr> {
     default_route_ip()
 }
 
-/// `connect` on a UDP socket sends nothing — it only asks the kernel which interface would be
-/// used. No packet leaves the machine (`~/EarshotBrain/Rules/lan-only-no-telemetry.md`).
+/// `connect` on a UDP socket sends nothing — it only asks the kernel which interface it *would*
+/// use. **No packet leaves the machine**, which is what keeps the "nothing leaves your network"
+/// promise honest; verify it with `strace -e trace=network` or a packet capture if you like.
 fn default_route_ip() -> Option<IpAddr> {
     let probe = UdpSocket::bind("0.0.0.0:0").ok()?;
     probe.connect("8.8.8.8:80").ok()?;
@@ -514,6 +518,9 @@ fn pump(
                 out.stats.underruns.load(Ordering::Relaxed),
                 Ordering::Relaxed,
             );
+            status
+                .trimmed
+                .store(out.stats.trimmed.load(Ordering::Relaxed), Ordering::Relaxed);
 
             if idle && status.connected.load(Ordering::Relaxed) {
                 status.connected.store(false, Ordering::Relaxed);
@@ -574,12 +581,18 @@ fn drain_reorder(
                     .fetch_add((resampled.len() - pushed) as u64, Ordering::Relaxed);
             }
             Release::Lost(_) => {
-                // Placeholder concealment: a frame of silence. Real PLC arrives with Opus in P2
-                // (`~/EarshotBrain/Features/resilience-plc-fec.md`).
+                // Placeholder concealment: a frame of silence. Real packet-loss concealment needs
+                // a codec that can invent a plausible frame, so it arrives with Opus.
                 let frame_samples = out.sample_rate as usize * proto::FRAME_MS as usize / 1000;
                 resampled.clear();
                 resampled.resize(frame_samples, 0.0);
-                out.ring.push(resampled);
+                // Counted like any other push. Concealment silence that the ring had no room for
+                // is still audio that did not play, and leaving it out made the stats line
+                // understate a full ring exactly when it was most worth knowing about.
+                let pushed = out.ring.push(resampled);
+                status
+                    .ring_drops
+                    .fetch_add((resampled.len() - pushed) as u64, Ordering::Relaxed);
                 resampler.reset();
             }
         }

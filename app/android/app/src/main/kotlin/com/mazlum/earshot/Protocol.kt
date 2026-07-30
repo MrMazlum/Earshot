@@ -5,7 +5,7 @@ import java.nio.ByteOrder
 
 /**
  * The Earshot wire format. MUST stay byte-identical to the receiver's implementation.
- * Source of truth: ~/EarshotBrain/05-Wire-Protocol.md §4 — change there first, then both ends.
+ * Specified in protocol/README.md — change that first, then both ends, in the same commit.
  *
  *  0               1               2               3
  *  +-------+-------+-------+-------+

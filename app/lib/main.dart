@@ -1,14 +1,14 @@
 // Earshot — Android client.
 //
-// Phase P1: one direction (phone mic → PC), raw PCM. No discovery and no Opus yet — those are
-// P2/P6. See ~/EarshotBrain/MASTER_ROADMAP.md.
+// One direction for now (phone mic → PC), raw PCM. No discovery and no Opus yet.
 //
 // The PC is identified by a nine-digit pairing code rather than an address; pairing.dart holds the
 // encoding and receiver/src/pairing.rs is the other half of it. Typing an address still works,
 // behind "Type an address instead", because a code cannot express every address.
 //
-// The mic-source picker is not a settings nicety: it IS experiment P0.1. Only the two sources that
-// differ by specification are selectable — see MicSource for why the rest are locked.
+// The mic-source picker is not a settings nicety: it is the one experiment this app exists to run.
+// Only the two sources that differ by Android specification are selectable — see MicSource for why
+// the rest are locked.
 //
 // Layout rule, learned the hard way: Android 15 forces edge-to-edge, so Flutter draws *under* the
 // navigation bar. The Start button lives in a pinned bar wrapped in SafeArea, never at the end of a
@@ -39,7 +39,7 @@ const _backdrop = Color(0xFF0B1310);
 /// straight to MIC, and UNPROCESSED silently falls back to MIC unless the device advertises
 /// `PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED`. Offering four choices that may all be the same
 /// recording is worse than offering two that are definitely not. They come back when there is a
-/// measurement to justify them — that is experiment P0.1.
+/// measurement on a real phone to justify them.
 class MicSource {
   final int id;
   final String name;

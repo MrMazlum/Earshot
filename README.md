@@ -130,6 +130,8 @@ published here, or not claimed at all.
   can check that yourself
 - **The pairing code identifies a PC; it does not authenticate one.** Anyone already on your network
   could send audio to a running receiver
+- **The audio is not encrypted yet.** It crosses your own Wi-Fi as plain samples. [SECURITY.md](SECURITY.md)
+  lists what Earshot does and does not promise, and how to report a problem privately
 
 ## What works today
 
@@ -250,14 +252,17 @@ doesn't recognise by name.
 |---|---|
 | `app/` | the Android app — Flutter UI, Kotlin capture service |
 | `receiver/` | the PC program, in Rust |
-| `protocol/` | the exact format the two sides use to talk, and the pairing-code test vectors |
-| `tools/` | measuring scripts |
-| `docs/` | setup guides, and the checklist to clear before this repo goes public |
+| `protocol/` | [the wire format, specified](protocol/README.md), and the pairing-code test vectors |
+| `tools/` | development helpers |
+| `docs/` | the checklist to clear before this repo goes public |
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first — it is short, and most of it is about the audio thread
-and about not committing your own IP address.
+and about not committing your own IP address. Writing another client? Everything you need is in
+[`protocol/README.md`](protocol/README.md).
+
+Found a security problem? Please report it privately — see [SECURITY.md](SECURITY.md).
 
 ## Licence
 

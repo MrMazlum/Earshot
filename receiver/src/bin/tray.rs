@@ -35,7 +35,7 @@ const REFRESH: Duration = Duration::from_secs(1);
 
 #[cfg(target_os = "linux")]
 const USAGE: &str = "\
-earshot-tray — Earshot in the system tray, no terminal needed
+earshot-tray - Earshot in the system tray, no terminal needed
 
 USAGE:
     earshot-tray [OPTIONS]
@@ -475,7 +475,7 @@ fn main() {
                 println!("Installed.");
                 println!("  binary      {}", bin.display());
                 println!("  login item  {}", desktop.display());
-                println!("\nEarshot will start with your next login. Starting it now too…");
+                println!("\nEarshot will start with your next login. Starting it now too...");
             }
             Err(e) => {
                 eprintln!("error: {e}");

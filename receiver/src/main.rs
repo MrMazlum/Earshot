@@ -4,8 +4,7 @@
 //! tray application (`earshot-tray`) drives too — keep behaviour changes in there, not here.
 //!
 //! Scope: one direction, raw PCM, no discovery, no encryption. `--virtual-mic` makes other
-//! applications see the phone as an input device (Linux only so far).
-//! Roadmap and exit gates: `~/EarshotBrain/MASTER_ROADMAP.md`.
+//! applications see the phone as an input device.
 
 use earshot::audio;
 use earshot::cable;
@@ -27,7 +26,7 @@ struct Args {
 }
 
 const USAGE: &str = "\
-earshot-receiver — turns your phone into this machine's microphone
+earshot-receiver - turns your phone into this machine's microphone
 
 USAGE:
     earshot-receiver [OPTIONS]
@@ -101,29 +100,43 @@ fn parse_args() -> Result<Args, String> {
 /// never shown at all, and the symptom is indistinguishable from a phone that is not sending. On
 /// Linux the default is the other way round — nothing blocks inbound unless the user turned a
 /// firewall on — so the same hint leads with the network instead.
-fn print_nothing_arriving_hint(port: u16) {
-    println!("  ! Nothing has arrived yet.");
-    if cfg!(target_os = "windows") {
-        println!("    If the phone says it is sending, Windows Firewall is the usual reason: it");
-        println!("    drops incoming UDP for a program that has no rule, and the prompt that would");
-        println!("    have asked you needs an administrator. In an Administrator PowerShell:");
-        println!();
-        println!(
-            "      New-NetFirewallRule -DisplayName Earshot -Direction Inbound \
-             -Protocol UDP -LocalPort {port} -Action Allow"
-        );
-        println!();
-        println!("    Then check: the phone and this PC on the same Wi-Fi, and this network set to");
-        println!("    Private rather than Public in Windows settings.");
+///
+/// Built as a string rather than printed line by line so both branches can be read back in a test.
+/// The Windows text is the one that matters most and the one no local build ever runs.
+fn nothing_arriving_hint(port: u16, windows: bool) -> String {
+    let mut lines: Vec<String> = vec!["  ! Nothing has arrived yet.".into()];
+    if windows {
+        lines.extend([
+            "    If the phone says it is sending, Windows Firewall is the usual reason: it".into(),
+            "    drops incoming UDP for a program that has no rule, and the prompt that would".into(),
+            "    have asked you needs an administrator. In an Administrator PowerShell:".into(),
+            String::new(),
+            format!(
+                "      New-NetFirewallRule -DisplayName Earshot -Direction Inbound \
+                 -Protocol UDP -LocalPort {port} -Action Allow"
+            ),
+            String::new(),
+            "    Then check: the phone and this PC on the same Wi-Fi, and this network set to".into(),
+            "    Private rather than Public in Windows settings.".into(),
+        ]);
     } else {
-        println!("    Check the phone and this PC are on the same Wi-Fi, and that the code or");
-        println!("    address in the app matches the one above. If a firewall is running:");
-        println!();
-        println!("      sudo ufw allow {port}/udp");
+        lines.extend([
+            "    Check the phone and this PC are on the same Wi-Fi, and that the code or".into(),
+            "    address in the app matches the one above. If a firewall is running:".into(),
+            String::new(),
+            format!("      sudo ufw allow {port}/udp"),
+        ]);
     }
-    println!();
-    println!("    Guest or client-isolation Wi-Fi blocks device-to-device traffic entirely; a");
-    println!("    phone hotspot with the PC joined to it is a reliable way to rule that out.");
+    lines.extend([
+        String::new(),
+        "    Guest or client-isolation Wi-Fi blocks device-to-device traffic entirely; a".into(),
+        "    phone hotspot with the PC joined to it is a reliable way to rule that out.".into(),
+    ]);
+    lines.join("\n")
+}
+
+fn print_nothing_arriving_hint(port: u16) {
+    println!("{}", nothing_arriving_hint(port, cfg!(target_os = "windows")));
 }
 
 /// Prints and exits — but on Windows, waits first.
@@ -282,6 +295,16 @@ fn run(config: Config) -> Result<(), String> {
             last_line = Instant::now();
             if status.connected.load(Ordering::Relaxed) {
                 let ring_drops = status.ring_drops.load(Ordering::Relaxed);
+                // Only shown once they happen, so the ordinary line stays readable. A trimmed
+                // count that keeps climbing is clock drift being held in check.
+                let extra = [
+                    (ring_drops, "ring-drops"),
+                    (status.trimmed.load(Ordering::Relaxed), "trimmed"),
+                ]
+                .iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, label)| format!("  {label} {n}"))
+                .collect::<String>();
                 println!(
                     "{:>5} pkt/s  {:>4} kbps  buffered {:>5.1} ms  lost {}  late {}  dup {}  underruns {}{}",
                     status.pkt_per_sec.load(Ordering::Relaxed),
@@ -291,11 +314,7 @@ fn run(config: Config) -> Result<(), String> {
                     status.late.load(Ordering::Relaxed),
                     status.duplicates.load(Ordering::Relaxed),
                     status.underruns.load(Ordering::Relaxed),
-                    if ring_drops > 0 {
-                        format!("  ring-drops {ring_drops}")
-                    } else {
-                        String::new()
-                    },
+                    extra,
                 );
             }
         }
@@ -309,5 +328,52 @@ fn run(config: Config) -> Result<(), String> {
     match status.fatal() {
         Some(e) => Err(e),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A Windows console is not reliably UTF-8. On the Turkish code page (857) or a
+    /// Western-European one (1252), an em dash or an ellipsis renders as mojibake — and `--help`
+    /// and this hint are the first things a confused user reads. Doc comments are exempt; anything
+    /// that reaches a terminal is not.
+    #[test]
+    fn everything_printed_to_a_terminal_is_plain_ascii() {
+        assert!(USAGE.is_ascii(), "USAGE is not ascii");
+        for windows in [true, false] {
+            let hint = nothing_arriving_hint(47811, windows);
+            assert!(hint.is_ascii(), "hint (windows={windows}) is not ascii:\n{hint}");
+        }
+    }
+
+    /// The Windows branch is the one that matters and the one no build on this machine ever runs,
+    /// so it is checked from here rather than trusted.
+    #[test]
+    fn the_windows_hint_hands_over_a_firewall_rule_for_the_actual_port() {
+        let hint = nothing_arriving_hint(47899, true);
+        assert!(hint.contains("New-NetFirewallRule"), "{hint}");
+        assert!(hint.contains("-LocalPort 47899"), "{hint}");
+        assert!(!hint.contains("ufw"), "that is the Linux advice: {hint}");
+    }
+
+    #[test]
+    fn the_linux_hint_does_not_tell_anyone_to_open_powershell() {
+        let hint = nothing_arriving_hint(47811, false);
+        assert!(hint.contains("sudo ufw allow 47811/udp"), "{hint}");
+        assert!(!hint.contains("PowerShell"), "{hint}");
+    }
+
+    /// Both platforms share the closing paragraph: guest Wi-Fi defeats everything above it, and
+    /// saying so is what stops the next hour going into firewall rules that were never the problem.
+    #[test]
+    fn both_platforms_mention_client_isolation() {
+        for windows in [true, false] {
+            assert!(
+                nothing_arriving_hint(47811, windows).contains("client-isolation"),
+                "windows={windows}"
+            );
+        }
     }
 }

@@ -20,10 +20,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.mazlum.earshot"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26  // notification channels + modern foreground services
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -32,8 +29,13 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Signed with the DEBUG key, deliberately and temporarily. It makes `flutter run
+            // --release` and sideloading work with no keystore in the tree, and it is why an APK
+            // from CI will not install over one you built yourself: different signature.
+            //
+            // Real signing needs a keystore, and a keystore must never be committed to this
+            // repository. Until that exists, the release APK is fine to sideload and is not a
+            // basis for trusting the build - SECURITY.md says so too.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

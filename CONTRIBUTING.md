@@ -30,9 +30,13 @@ required. Prefer no dependency at all.
 
 ## Protocol changes
 
-`protocol/` is the source of truth for what the two halves say to each other. Changing the wire
-format means, in a single commit: a version bump, both ends updated, and the test vectors
-regenerated.
+[`protocol/README.md`](protocol/README.md) is the source of truth for what the two halves say to
+each other — it specifies the datagram byte by byte. Changing the wire format means, in a single
+commit: that file, a version bump, both ends updated, and the test vectors regenerated.
+
+**Treat every datagram as hostile.** It arrives over UDP from anyone on the LAN, with no handshake
+and no authentication. Bounds-check before indexing, and make sure no field an attacker controls can
+decide how long a loop runs — that one has bitten this project already, in the reorder window.
 
 `protocol/pairing-vectors.csv` works the same way. Both `receiver/src/pairing.rs` and
 `app/lib/pairing.dart` are tested against it, which is what stops the two implementations drifting
@@ -69,4 +73,8 @@ made-up addresses for this reason.
 Deleting one of these in a later commit does not remove it; it stays in the history and in every
 clone. If something does get committed, rotate it rather than merely deleting it.
 
-See `docs/pre-open-source-checklist.md`.
+See [`docs/pre-open-source-checklist.md`](docs/pre-open-source-checklist.md).
+
+## Reporting a security problem
+
+Not here, and not in a public issue — see [SECURITY.md](SECURITY.md).

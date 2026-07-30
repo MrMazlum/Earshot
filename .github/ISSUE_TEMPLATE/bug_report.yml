@@ -1,0 +1,79 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time.
+
+        **Please do not paste your IP addresses, your pairing code, your Wi-Fi name, or a packet
+        capture of your own network.** None of it helps, and all of it is yours. Say
+        "192.168.x.y" or "my laptop's address" instead — that is enough detail for every bug
+        anyone has hit so far.
+
+        If this is a security problem, do not file it here — see SECURITY.md.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      placeholder: |
+        1. Ran `earshot-receiver --virtual-mic`
+        2. Typed the code into the app and pressed Start
+        3. The app says LIVE, the receiver still says "Waiting for the phone"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: PC side
+      options:
+        - Linux
+        - Windows
+        - macOS (unsupported, but say so anyway)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Earshot version
+      description: The release tag you downloaded, or the commit if you built it yourself.
+      placeholder: v0.1.1
+    validations:
+      required: true
+
+  - type: input
+    id: phone
+    attributes:
+      label: Phone and Android version
+      placeholder: Some Xiaomi phone, Android 15
+
+  - type: textarea
+    id: output
+    attributes:
+      label: What the receiver printed
+      description: >
+        The terminal output, with anything identifying removed. The lines about buffered/lost/late
+        are the useful ones.
+      render: text
+
+  - type: checkboxes
+    id: ruled-out
+    attributes:
+      label: Already tried
+      description: Not required, but each one you tick saves a round trip.
+      options:
+        - label: Both devices are on the same Wi-Fi, and it is not a guest network
+        - label: On Windows, added the inbound UDP firewall rule the receiver prints
+        - label: The input selected in Discord/OBS is the *recording* end of the cable (`CABLE Output`, not `CABLE Input`)

@@ -13,7 +13,7 @@ use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
-earshot-testsend — pretends to be the phone, so the receiver can be tested alone
+earshot-testsend - pretends to be the phone, so the receiver can be tested alone
 
 USAGE:
     earshot-testsend [OPTIONS]
@@ -119,7 +119,7 @@ fn run(args: &Args) -> Result<(), String> {
     };
 
     println!(
-        "sending {} Hz tone → {}  ({} Hz mono, {} ms frames, loss {:.0}%, jitter {} ms)",
+        "sending {} Hz tone to {}  ({} Hz mono, {} ms frames, loss {:.0}%, jitter {} ms)",
         args.tone,
         args.to,
         args.rate,

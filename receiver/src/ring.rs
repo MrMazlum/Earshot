@@ -1,11 +1,11 @@
 //! A lock-free single-producer/single-consumer ring of f32 samples.
 //!
-//! This exists so the audio callback never takes a lock: `~/EarshotBrain/Rules/no-blocking-audio-thread.md`.
-//! The network thread is the only producer, the audio callback is the only consumer.
+//! This exists so the audio callback never takes a lock — see the audio-thread rule in
+//! `CONTRIBUTING.md`. The network thread is the only producer, the audio callback the only consumer.
 //!
 //! Its fill level *is* the buffering latency — 960 samples at 48 kHz = 20 ms. Watch it in the stats
-//! line: a level that keeps climbing is clock drift, not jitter
-//! (`~/EarshotBrain/Concepts/clock-drift-and-resampling.md`).
+//! line: a level that keeps climbing is clock drift rather than jitter, and the fix for that is a
+//! resampler that tracks the drift, not a bigger buffer.
 
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -84,6 +84,22 @@ impl SpscRing {
         let head = self.head.load(Ordering::Acquire);
         self.tail.store(head, Ordering::Release);
     }
+
+    /// Consumer side. Drops up to `n` of the **oldest** samples and returns how many went.
+    ///
+    /// Consumer side specifically because `tail` belongs to the consumer; a producer that moved it
+    /// would break the single-writer-per-index rule this whole type rests on.
+    ///
+    /// Dropping the oldest is the point. The buffer's fill level *is* the latency, so when it has
+    /// grown too far the stale end is what has to go — throwing away the newest samples instead
+    /// would keep the delay and lose the audio.
+    pub fn discard(&self, n: usize) -> usize {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        let dropped = n.min(head - tail);
+        self.tail.store(tail + dropped, Ordering::Release);
+        dropped
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +147,27 @@ mod tests {
             assert_eq!(r.pop(&mut out), 4);
             assert_eq!(out, v);
         }
+    }
+
+    #[test]
+    fn discard_drops_the_oldest_and_keeps_the_newest() {
+        let r = SpscRing::new(16);
+        r.push(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(r.discard(2), 2);
+        assert_eq!(r.len(), 3);
+
+        let mut out = [0.0; 3];
+        assert_eq!(r.pop(&mut out), 3);
+        assert_eq!(out, [3.0, 4.0, 5.0], "the freshest audio must survive");
+    }
+
+    #[test]
+    fn discarding_more_than_there_is_empties_it_without_going_negative() {
+        let r = SpscRing::new(16);
+        r.push(&[1.0, 2.0]);
+        assert_eq!(r.discard(99), 2);
+        assert!(r.is_empty());
+        assert_eq!(r.discard(1), 0, "an empty ring has nothing left to give");
     }
 
     #[test]
