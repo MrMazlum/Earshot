@@ -1,38 +1,39 @@
 # Pre-open-source checklist
 
-This repo is **private** until every box below is ticked. The plan is to publish under GPL-3.0.
+This was the gate this repository had to clear before it was published under GPL-3.0.
 Owner's instruction (2026-07-29): *"after all of it is done we will make sure there is no security
-leak and then we will make it open sourced."*
+leak and then we will make it open sourced."* It cleared it on **2026-07-30**.
 
-## What is left (final review 2026-07-30)
+## ✅ Published 2026-07-30
 
-**The code and the tree are clear.** Verified this pass: no secret in 22,707 lines of history
-against twelve patterns (§1), no personal IP/MAC/serial anywhere (§3), no AI or editor fingerprints,
-every relative link in every doc resolves, 73 files and 0.5 MB total with no stray binaries, a single
-author across the whole history, and a workflow that is read-only except on the release job.
+Every box below is ticked and the repository is public. This file stays in the tree on purpose:
+what was actually checked is more useful to a reader — and to whoever maintains this next — than a
+claim that it was.
 
-Three things remain, none of them code:
+**What was done on the day, in order:**
 
-1. Turn on GitHub secret scanning + push protection, in the repo settings, **before** flipping it
-   public
-2. ⚠️ Never `git push --all` — see §1. The remote has only `main` and the version tags, and
-   `backup-pre-squash` must stay local
-3. When the repo goes public, delete the "these links 404 while the repo is private" note from the
-   README's Download table. Nothing else in the README needs changing
+1. **Commit email replaced throughout the history.** All 15 commits and all 5 annotated tags carried
+   the owner's personal address, which publication would have made permanent in every clone and
+   fork. Rewritten to GitHub's `190613564+MrMazlum@users.noreply.github.com` **before** the repo was
+   public, i.e. while no clone of it existed anywhere. Verified afterwards: the old address appears
+   zero times in any commit, tag object or file; every commit still resolves to the GitHub account
+   `MrMazlum`; and **every one of the 15 commits has a byte-identical tree to before the rewrite** —
+   only metadata changed. `git config user.email` is pinned locally so a future commit cannot
+   reintroduce it. ⚠️ That is a *repository-local* setting: a fresh clone inherits the global one
+   again.
+2. **`backup-pre-squash` deleted.** The final sweep found six `Co-Authored-By:` trailers naming an
+   AI assistant — on that branch and only that branch, never on `main`, never on the remote. It made
+   a single `git push --all` enough to break a standing rule permanently. Archived to a `git bundle`
+   outside the repository, then deleted, so the mistake is now impossible rather than merely
+   documented. §1.
+3. **Secret scanning and push protection enabled** the moment the repo went public — they are not
+   offered to private repositories on the free plan, so "before flipping" was not achievable and
+   "within the same minute" was. Dependabot alerts and security updates on as well.
+4. **README notes that only made sense while private removed**, and the download table verified to
+   return `200` unauthenticated for all three artefacts.
 
-### One decision to make first, because it cannot be undone later
-
-**Every commit carries the author's real email address**, and publishing puts it in every clone and
-fork permanently. That is normal and many people publish that way on purpose — it is how anyone
-contacts a maintainer. But it is also a well-known address-harvesting target, and the moment to
-change it is *before* the first clone exists, not after. Either:
-
-- **accept it** and publish (nothing to do), or
-- switch to GitHub's `ID+username@users.noreply.github.com` and rewrite the eight commits, which
-  means re-pointing all four tags and a force-push — cheap now, impossible to do cleanly later
-
-One real security finding turned up during this review and is **fixed**: a remote stall in the
-reorder window, §4.
+**One accepted, disclosed limitation:** the Android APK is signed with the debug key. It is in
+`SECURITY.md` and in §2 below, and it is a known state, not an oversight.
 
 ## 1. History, not just the working tree
 Deleting a secret in a later commit does not remove it — it stays in the git history and in every
@@ -51,7 +52,9 @@ the public repo from a fresh, squashed initial commit).
       keys (`AIza`), AWS (`AKIA`), OpenAI (`sk-`), Slack (`xox*`), PEM private keys and
       certificates, JWTs, and quoted `password=` / `secret=` assignments. **Zero hits on every
       one.** A dedicated scanner is still worth running as a second opinion, not as a suspicion
-- [ ] Enable GitHub secret scanning + push protection on the repo before it goes public
+- [x] **GitHub secret scanning + push protection enabled 2026-07-30**, together with Dependabot
+      alerts and security updates. Not available on private repositories on the free plan, so this
+      happened in the same minute as the visibility change rather than before it
 - [x] ✅ **`backup-pre-squash` is gone from the repo (2026-07-30), and this is why it mattered.** A
       final sweep found **six `Co-Authored-By:` trailers naming an AI assistant** — on that branch
       and *only* that branch. `main` has zero, and the remote only ever had `main` plus tags, so
