@@ -123,7 +123,9 @@ Publishing invites people to look for holes — better to find them first.
 - [x] **Dependencies**: every runtime dependency is GPL-3.0-compatible — cpal `Apache-2.0`, alsa
       `Apache-2.0/MIT`, alsa-sys `MIT`, dasp_sample `MIT OR Apache-2.0`, if-addrs
       `MIT OR BSD-3-Clause`, ksni `Unlicense`, dbus / dbus-tree / libdbus-sys `Apache-2.0/MIT`,
-      thiserror / libc / bitflags / cfg-if `MIT OR Apache-2.0`
+      thiserror / libc / bitflags / cfg-if `MIT OR Apache-2.0`. Added 2026-07-30 for the Windows
+      tray: windows-sys and windows-targets, both `MIT OR Apache-2.0`, both declarations with no
+      code and no build script
 - [x] `cargo audit` is not installed here, so the advisories were checked by hand. Two crates in the
       tree are unmaintained and carry RUSTSEC advisories — `ansi_term` (RUSTSEC-2021-0139) and
       `atty` (RUSTSEC-2021-0145). Both arrive via `clap 2` → `dbus-codegen`, which is a **build
@@ -157,8 +159,9 @@ Publishing invites people to look for holes — better to find them first.
 ## 6. Publication hygiene
 - [x] README honest about status and about latency. Under-100 ms is stated as a **target** and
       explicitly flagged as unmeasured: *"That will be measured and published here, or not claimed
-      at all."* The Windows row says the build has never been run by a human; the macOS row says
-      "nothing — never built, not in CI"
+      at all."* Windows is now stated as working, because it was run by hand on 2026-07-30; its
+      *tray* is stated as built but unrun, because it is. The macOS row says "nothing — never
+      built, not in CI"
 - [x] `.github/ISSUE_TEMPLATE/bug_report.yml` — opens by asking people **not** to paste IP
       addresses, pairing codes, Wi-Fi names or packet captures, and routes security reports away
       from public issues via `config.yml`

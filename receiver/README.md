@@ -45,6 +45,13 @@ so this works out of the box there; on stock GNOME the process runs and shows no
 `ksni` was chosen over `tray-icon`/`libappindicator` because it speaks StatusNotifierItem over D-Bus
 in pure Rust: no `libayatana-appindicator3-dev`, no GTK, nothing to `apt install` before building.
 
+**Windows has its own back-end**, `wintray.rs`, because `ksni` has none and every crate wrapping the
+Win32 notification area brings a GUI event loop with it. It ships as `Earshot.exe`, built with the
+`windows` subsystem so no console appears. Note what is *not* in it: none of the words, and none of
+the icon. Those are in `trayui.rs`, `cable.rs` and `help.rs`, which compile and are tested on every
+platform — that file cannot be tested on the machine this is developed on, so nothing with logic in
+it is allowed to live there.
+
 **Rust 1.75 is the minimum** — that is what `apt install cargo` gives on Ubuntu 24.04, and it is
 what this builds and tests against. The lockfile is kept at version 3 for the same reason; a newer
 cargo will silently rewrite it to version 4, which 1.75 then refuses to read. If you regenerate it
@@ -99,5 +106,4 @@ indistinguishable from a phone that is not sending.
 
 ## Not here yet
 
-Opus decoding (needs `libopus-dev`), a tray icon on Windows (`ksni` is Linux-only), the PC → phone
-direction, discovery, pairing and encryption.
+Opus decoding (needs `libopus-dev`), the PC → phone direction, discovery and encryption.
