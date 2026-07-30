@@ -52,17 +52,13 @@ class MicSource {
 
   static const all = <MicSource>[
     MicSource(7, 'Voice call',
-        "Runs the phone's echo and noise cancellation, like a real call. May force 16 kHz."),
-    MicSource(1, 'Plain mic',
-        'Main microphone, little processing. Fan and room noise come through.'),
-    MicSource(6, 'Speech',
-        'Tuned for speech recognition. On many phones this is the plain microphone under another name.',
+        'Echo and noise cancellation, like a phone call. May force 16 kHz.'),
+    MicSource(1, 'Plain mic', 'Barely processed. Room and fan noise come through.'),
+    MicSource(6, 'Speech', 'Often the plain mic under another name.',
         available: false),
-    MicSource(9, 'Unprocessed',
-        'No vendor processing at all — but only on phones that support it, and the rest quietly give you the plain microphone instead.',
+    MicSource(9, 'Unprocessed', 'No processing, where the phone supports it.',
         available: false),
-    MicSource(5, 'Camcorder',
-        'The microphone array used for video. Also aliased to the plain microphone on a lot of devices.',
+    MicSource(5, 'Camcorder', 'The video mic array. Often the plain mic.',
         available: false),
   ];
 
@@ -265,6 +261,83 @@ class _SessionPageState extends State<SessionPage> {
     }
   }
 
+  /// The explanations that used to sit permanently on the main screen. They are worth having and
+  /// worth reading once; they are not worth the space they took every time the app was opened.
+  void _showMicInfo(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        final theme = Theme.of(context);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Choosing a microphone',
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 12),
+                Text(
+                  'Android phones have several microphones and a chip that removes background '
+                  'noise. Which of that you get depends on the source an app asks for.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 16),
+                for (final s in MicSource.all)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          s.available ? Icons.check_circle_outline : Icons.lock_outline,
+                          size: 17,
+                          color: s.available
+                              ? theme.colorScheme.primary
+                              : theme.hintColor,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text.rich(TextSpan(children: [
+                            TextSpan(
+                              text: '${s.name}  ',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            TextSpan(
+                              text: s.blurb,
+                              style: TextStyle(color: theme.hintColor),
+                            ),
+                          ]), style: theme.textTheme.bodySmall),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                Text(
+                  'The locked ones come back once they can be shown to sound different on a real '
+                  'phone. On many devices they are the plain microphone under another name, and a '
+                  'choice that changes nothing is worse than no choice.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Sample rate is a request, not a promise: the noise-cancelled source may hand '
+                  'back 16 kHz whatever you pick. The rate you actually got is shown while '
+                  'streaming.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -281,14 +354,25 @@ class _SessionPageState extends State<SessionPage> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 children: [
-                  _LevelMeter(level: _level, live: _running),
-                  const SizedBox(height: 20),
-                  _Section(
+                  _LevelMeter(
+                    level: _level,
+                    live: _running,
+                    // The numbers replace the caption rather than joining it: while streaming they
+                    // are the thing worth reading, and telling someone to speak is not.
+                    metrics: _running
+                        ? '${(_actualRate / 1000).round()} kHz  ·  '
+                            '$kbps kbps  ·  $_packets pkt'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  _Card(
                     title: 'Your PC',
-                    subtitle: _manual
-                        ? 'The receiver prints this when it starts.'
-                        : 'Your PC shows a nine-digit code when the receiver '
-                            'starts. Type it here.',
+                    action: _running
+                        ? null
+                        : _CardAction(
+                            label: _manual ? 'Use a code' : 'Use an address',
+                            onTap: () => setState(() => _manual = !_manual),
+                          ),
                     child: _manual
                         ? _AddressFields(
                             host: _host,
@@ -302,23 +386,16 @@ class _SessionPageState extends State<SessionPage> {
                             onChanged: () => setState(() {}),
                           ),
                   ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: _running
-                          ? null
-                          : () => setState(() => _manual = !_manual),
-                      child: Text(_manual
-                          ? 'Use a pairing code instead'
-                          : 'Type an address instead'),
+                  const SizedBox(height: 14),
+                  _Card(
+                    title: 'Audio',
+                    // Why three of the five are locked is a real answer, but it is a paragraph, and
+                    // a paragraph does not belong on the screen someone uses every day.
+                    action: _CardAction(
+                      icon: Icons.info_outline,
+                      label: 'About',
+                      onTap: () => _showMicInfo(context),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  _Section(
-                    title: 'Microphone',
-                    subtitle:
-                        "These two run different amounts of your phone's noise "
-                        'cancellation. Try both and listen.',
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -350,53 +427,39 @@ class _SessionPageState extends State<SessionPage> {
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: theme.hintColor),
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'The locked ones are coming back once they can be '
-                          'proven to sound different on a real phone — on many '
-                          'devices they are the plain microphone under another '
-                          'name, and a choice that changes nothing is worse '
-                          'than no choice.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.hintColor,
-                            fontStyle: FontStyle.italic,
-                          ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          child: Divider(height: 1),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text('Sample rate',
+                                  style: theme.textTheme.bodyMedium),
+                            ),
+                            SegmentedButton<int>(
+                              segments: const [
+                                ButtonSegment(
+                                    value: 48000, label: Text('48 kHz')),
+                                ButtonSegment(
+                                    value: 16000, label: Text('16 kHz')),
+                              ],
+                              selected: {_rate},
+                              showSelectedIcon: false,
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onSelectionChanged: _running
+                                  ? null
+                                  : (v) => setState(() => _rate = v.first),
+                            ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  _Section(
-                    title: 'Sample rate',
-                    subtitle:
-                        'Some sources ignore this and give you 16 kHz anyway — '
-                        'the real rate is shown once streaming.',
-                    child: SegmentedButton<int>(
-                      segments: const [
-                        ButtonSegment(value: 48000, label: Text('48 kHz')),
-                        ButtonSegment(value: 16000, label: Text('16 kHz')),
-                      ],
-                      selected: {_rate},
-                      showSelectedIcon: false,
-                      onSelectionChanged: _running
-                          ? null
-                          : (v) => setState(() => _rate = v.first),
-                    ),
-                  ),
-                  if (_running) ...[
-                    const SizedBox(height: 24),
-                    _StatRow(
-                        label: 'Actual sample rate', value: '$_actualRate Hz'),
-                    _StatRow(label: 'Packets sent', value: '$_packets'),
-                    _StatRow(label: 'Bitrate', value: '$kbps kbps'),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Raw audio for now — Opus compression comes next and cuts '
-                      'this to about 32 kbps.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: theme.hintColor),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -630,7 +693,10 @@ class _LiveBadge extends StatelessWidget {
 class _LevelMeter extends StatelessWidget {
   final double level;
   final bool live;
-  const _LevelMeter({required this.level, required this.live});
+
+  /// Shown instead of the caption while streaming. Null when idle.
+  final String? metrics;
+  const _LevelMeter({required this.level, required this.live, this.metrics});
 
   static const _segments = 26;
 
@@ -639,58 +705,55 @@ class _LevelMeter extends StatelessWidget {
     final theme = Theme.of(context);
     final lit = (level.clamp(0.0, 1.0) * _segments).round();
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest
-                .withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                height: 42,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: List.generate(_segments, (i) {
-                    final on = live && i < lit;
-                    // Taller towards the right, so the meter has a direction even at rest.
-                    final height = 12.0 + (i / (_segments - 1)) * 30.0;
-                    return Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 90),
-                          height: height,
-                          decoration: BoxDecoration(
-                            color: on
-                                ? _colourFor(i, theme)
-                                : theme.colorScheme.onSurface
-                                    .withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                live
-                    ? 'Speak — these bars should move'
-                    : 'Not streaming',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.hintColor),
-              ),
-            ],
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
         ),
-      ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 42,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(_segments, (i) {
+                final on = live && i < lit;
+                // Taller towards the right, so the meter has a direction even at rest.
+                final height = 12.0 + (i / (_segments - 1)) * 30.0;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 90),
+                      height: height,
+                      decoration: BoxDecoration(
+                        color: on
+                            ? _colourFor(i, theme)
+                            : theme.colorScheme.onSurface
+                                .withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            metrics ?? 'Not streaming',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.hintColor,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -702,36 +765,74 @@ class _LevelMeter extends StatelessWidget {
   }
 }
 
-class _Section extends StatelessWidget {
+/// A secondary control in a card header: the escape hatch, the explanation. Small on purpose - it
+/// is there when looked for and quiet when not.
+class _CardAction {
+  final String label;
+  final IconData? icon;
+  final VoidCallback onTap;
+  const _CardAction({required this.label, this.icon, required this.onTap});
+}
+
+/// One group of controls. Structure comes from the container and the header, so the content does
+/// not have to be introduced by a paragraph of text.
+class _Card extends StatelessWidget {
   final String title;
-  final String? subtitle;
+  final _CardAction? action;
   final Widget child;
-  const _Section({required this.title, this.subtitle, required this.child});
+  const _Card({required this.title, this.action, required this.child});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title.toUpperCase(),
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.primary,
-            letterSpacing: 1.1,
-            fontWeight: FontWeight.w700,
-          ),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
         ),
-        if (subtitle != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            subtitle!,
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 28,
+            child: Row(
+              children: [
+                Text(
+                  title.toUpperCase(),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
+                if (action != null)
+                  TextButton.icon(
+                    onPressed: action!.onTap,
+                    icon: action!.icon == null
+                        ? const SizedBox.shrink()
+                        : Icon(action!.icon, size: 16),
+                    label: Text(action!.label),
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.hintColor,
+                      textStyle: theme.textTheme.labelMedium,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+              ],
+            ),
           ),
+          const SizedBox(height: 10),
+          child,
         ],
-        const SizedBox(height: 10),
-        child,
-      ],
+      ),
     );
   }
 }
@@ -829,27 +930,3 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
-class _StatRow extends StatelessWidget {
-  final String label;
-  final String value;
-  const _StatRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.bodyMedium),
-          Text(
-            value,
-            style: const TextStyle(
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
