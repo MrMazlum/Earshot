@@ -4,21 +4,35 @@ This repo is **private** until every box below is ticked. The plan is to publish
 Owner's instruction (2026-07-29): *"after all of it is done we will make sure there is no security
 leak and then we will make it open sourced."*
 
-## What is left (reviewed 2026-07-30)
+## What is left (final review 2026-07-30)
 
-Everything below is ticked except four items, none of which is a code change:
+**The code and the tree are clear.** Verified this pass: no secret in 22,707 lines of history
+against twelve patterns (§1), no personal IP/MAC/serial anywhere (§3), no AI or editor fingerprints,
+every relative link in every doc resolves, 73 files and 0.5 MB total with no stray binaries, a single
+author across the whole history, and a workflow that is read-only except on the release job.
 
-1. Run a real secret scanner (`gitleaks` / `trufflehog`) — neither is installed on this machine.
-   The manual `git log -p --all` pass is done and clean, so this is a second opinion, not a
-   suspicion
-2. Turn on GitHub secret scanning + push protection, in the repo settings, **before** flipping it
+Three things remain, none of them code:
+
+1. Turn on GitHub secret scanning + push protection, in the repo settings, **before** flipping it
    public
-3. ⚠️ Do not `git push --all` — see §1. Only `main` and the version tags belong on the remote
-4. When the repo goes public, delete the "these links 404 while the repo is private" note from the
+2. ⚠️ Never `git push --all` — see §1. The remote has only `main` and the version tags, and
+   `backup-pre-squash` must stay local
+3. When the repo goes public, delete the "these links 404 while the repo is private" note from the
    README's Download table. Nothing else in the README needs changing
 
-One real security finding turned up in this review and is **fixed**: a remote stall in the reorder
-window, §4.
+### One decision to make first, because it cannot be undone later
+
+**Every commit carries the author's real email address**, and publishing puts it in every clone and
+fork permanently. That is normal and many people publish that way on purpose — it is how anyone
+contacts a maintainer. But it is also a well-known address-harvesting target, and the moment to
+change it is *before* the first clone exists, not after. Either:
+
+- **accept it** and publish (nothing to do), or
+- switch to GitHub's `ID+username@users.noreply.github.com` and rewrite the eight commits, which
+  means re-pointing all four tags and a force-push — cheap now, impossible to do cleanly later
+
+One real security finding turned up during this review and is **fixed**: a remote stall in the
+reorder window, §4.
 
 ## 1. History, not just the working tree
 Deleting a secret in a later commit does not remove it — it stays in the git history and in every
@@ -31,7 +45,12 @@ the public repo from a fresh, squashed initial commit).
       — manual pass done 2026-07-30. Every hit is the *word* appearing in documentation that says
       not to commit these things (`.gitignore`, `CONTRIBUTING.md`, this file, the GPL text, and
       `GH_TOKEN: ${{ github.token }}`, which is the CI-provided token and not a value). No secret
-- [ ] Scan with a real secret scanner (`gitleaks detect`, `trufflehog`) — neither is installed here
+- [x] **Pattern scan over the full history, 2026-07-30.** `gitleaks`/`trufflehog` are not installed
+      here, so the whole `git log -p --all` (22,707 diff lines) was scanned against the twelve
+      patterns those tools lead with: GitHub PATs (`ghp_`, `github_pat_`, `gh[orsu]_`), Google API
+      keys (`AIza`), AWS (`AKIA`), OpenAI (`sk-`), Slack (`xox*`), PEM private keys and
+      certificates, JWTs, and quoted `password=` / `secret=` assignments. **Zero hits on every
+      one.** A dedicated scanner is still worth running as a second opinion, not as a suspicion
 - [ ] Enable GitHub secret scanning + push protection on the repo before it goes public
 - [ ] ⚠️ **Do not `git push --all`.** A local `backup-pre-squash` branch still holds the pre-squash
       history. It has been reviewed and contains no secret, but it is not meant to be published, and
