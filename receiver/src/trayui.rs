@@ -240,6 +240,40 @@ impl View<'_> {
     }
 }
 
+/// A NUL-terminated UTF-16 string, which is what every Win32 `...W` entry point wants.
+///
+/// Here rather than in [`crate::wintray`] for the same reason as everything else in this module:
+/// that file is only compiled on Windows, so its tests only run on Windows, so a bug in it is found
+/// by CI at the earliest and by the user at the latest. This one is not hypothetical — the first
+/// version of [`copy_into`] shipped with a broken test that a Linux run could never have executed.
+pub fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Fills a fixed-size `szSomething` field, leaving room for the terminating NUL.
+///
+/// The subtlety is the surrogate pair. Windows counts UTF-16 code units, not characters, and
+/// `szTip` is 128 of them — so a tooltip ending in an emoji can be cut between the two halves of
+/// one. What is left is a lone lead surrogate, which is not text: some shell versions draw a
+/// replacement box, some refuse the whole string. Truncation therefore drops the orphan.
+pub fn copy_into(field: &mut [u16], text: &str) {
+    field.fill(0);
+    let limit = field.len().saturating_sub(1);
+    let mut n = 0;
+    for unit in text.encode_utf16() {
+        if n >= limit {
+            break;
+        }
+        field[n] = unit;
+        n += 1;
+    }
+    // A *lead* surrogate last means its partner did not fit. A trailing one is the second half of a
+    // pair that did, and must be kept.
+    if n > 0 && (0xd800..0xdc00).contains(&field[n - 1]) {
+        field[n - 1] = 0;
+    }
+}
+
 /// The tray icon, drawn rather than shipped.
 ///
 /// A `.ico` in the binary would need a resource compiler in the build, and a themed icon name (the
@@ -483,6 +517,64 @@ mod tests {
         let lines: Vec<&str> = tip.lines().collect();
         assert!(lines[0].starts_with("Earshot"));
         assert!(tip.find("Pairing code").unwrap() < 128);
+    }
+
+    #[test]
+    fn a_wide_string_is_terminated() {
+        assert_eq!(wide("hi"), vec![b'h' as u16, b'i' as u16, 0]);
+        assert_eq!(wide(""), vec![0]);
+    }
+
+    #[test]
+    fn a_field_is_filled_and_terminated() {
+        let mut field = [0xffffu16; 8];
+        copy_into(&mut field, "abc");
+        assert_eq!(&field[..3], &[b'a' as u16, b'b' as u16, b'c' as u16]);
+        assert_eq!(field[3], 0);
+    }
+
+    /// `szTip` is 128 units and a tooltip can outgrow it. Windows silently truncates what it draws;
+    /// leaving no terminator at all is ours to get wrong.
+    #[test]
+    fn an_oversized_field_still_ends_in_a_nul() {
+        let mut field = [0xffffu16; 4];
+        copy_into(&mut field, "abcdefgh");
+        assert_eq!(&field[..3], &[b'a' as u16, b'b' as u16, b'c' as u16]);
+        assert_eq!(field[3], 0);
+    }
+
+    /// The real invariant, and the one worth stating as such: whatever survives truncation must
+    /// still be **valid UTF-16**. Cutting between the halves of a surrogate pair leaves something
+    /// that is not text at all.
+    ///
+    /// Checked at every length, because which lengths split a pair depends on the text.
+    #[test]
+    fn truncation_always_leaves_valid_utf16() {
+        // Two emoji (two code units each) around an ASCII character, so pairs land at odd and even
+        // offsets alike.
+        for text in ["\u{1f600}\u{1f600}", "a\u{1f600}b\u{1f600}", "\u{1f600}a"] {
+            for len in 1..12usize {
+                let mut field = vec![0xffffu16; len];
+                copy_into(&mut field, text);
+                let end = field.iter().position(|&u| u == 0).unwrap_or(field.len());
+                assert!(
+                    String::from_utf16(&field[..end]).is_ok(),
+                    "len {len} of {text:?} left invalid UTF-16: {:x?}",
+                    &field[..end]
+                );
+                assert!(end < len, "no room left for the NUL at len {len}");
+            }
+        }
+    }
+
+    /// A pair that fits is kept whole — the fix for the above must not simply delete every
+    /// surrogate it sees.
+    #[test]
+    fn a_pair_that_fits_survives_intact() {
+        let mut field = [0xffffu16; 4];
+        copy_into(&mut field, "\u{1f600}\u{1f600}");
+        assert_eq!(String::from_utf16(&field[..2]).unwrap(), "\u{1f600}");
+        assert_eq!(field[2], 0);
     }
 
     #[test]

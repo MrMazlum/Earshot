@@ -64,7 +64,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::cable;
 use crate::engine::{self, Config, Engine, LanAddress};
 use crate::help;
-use crate::trayui::{icon_pixels, Snapshot, State, View};
+use crate::trayui::{copy_into, icon_pixels, wide, Snapshot, State, View};
 use crate::{autostart, virtualmic};
 
 /// Our own click notification. Anything from `WM_APP` up is the application's to define.
@@ -90,34 +90,6 @@ const ID_CABLE: usize = 8;
 const ID_STARTSTOP: usize = 9;
 const ID_AUTOSTART: usize = 10;
 const ID_QUIT: usize = 11;
-
-/// A NUL-terminated UTF-16 string, which is what every `...W` entry point wants.
-///
-/// Windows counts UTF-16 code units, not characters, and truncating between a surrogate pair
-/// produces a string the shell may refuse to draw at all. Nothing here is long enough for that to
-/// bite, but [`copy_into`] is where it would.
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-/// Fills a fixed-size `szSomething` field, truncating on a character boundary and always leaving
-/// room for the terminating NUL.
-fn copy_into(field: &mut [u16], text: &str) {
-    field.fill(0);
-    let limit = field.len() - 1;
-    let mut n = 0;
-    for unit in text.encode_utf16() {
-        if n >= limit {
-            break;
-        }
-        field[n] = unit;
-        n += 1;
-    }
-    // A lone leading surrogate at the end is not a character; drop it rather than emit half of one.
-    if n > 0 && (0xd800..0xdc00).contains(&field[n - 1]) {
-        field[n - 1] = 0;
-    }
-}
 
 /// Everything the tray owns. Lives in a thread-local because a window procedure is a plain
 /// `extern "system" fn` with nowhere to put a `self`.
@@ -863,46 +835,4 @@ pub fn run(config: Config, verbose: bool) -> i32 {
         }
     }
     code
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_wide_string_is_terminated() {
-        assert_eq!(wide("hi"), vec![b'h' as u16, b'i' as u16, 0]);
-        assert_eq!(wide(""), vec![0]);
-    }
-
-    #[test]
-    fn a_field_is_filled_and_terminated() {
-        let mut field = [0xffffu16; 8];
-        copy_into(&mut field, "abc");
-        assert_eq!(&field[..3], &[b'a' as u16, b'b' as u16, b'c' as u16]);
-        assert_eq!(field[3], 0);
-    }
-
-    /// `szTip` is 128 units and tooltips can outgrow it. Truncation is Windows' problem to draw,
-    /// but leaving no terminator is ours.
-    #[test]
-    fn an_oversized_field_still_ends_in_a_nul() {
-        let mut field = [0xffffu16; 4];
-        copy_into(&mut field, "abcdefgh");
-        assert_eq!(field[3], 0);
-        assert_eq!(&field[..3], &[b'a' as u16, b'b' as u16, b'c' as u16]);
-    }
-
-    /// Cutting a non-BMP character in half leaves a lone surrogate, which is not text and which
-    /// some shell versions refuse to draw at all.
-    #[test]
-    fn truncation_never_leaves_half_a_character() {
-        let mut field = [0xffffu16; 3];
-        // Two code units each.
-        copy_into(&mut field, "\u{1f600}\u{1f600}");
-        assert_eq!(field[2], 0);
-        for unit in field {
-            assert!(!(0xd800..0xdc00).contains(&unit), "lone lead surrogate: {field:?}");
-        }
-    }
 }
