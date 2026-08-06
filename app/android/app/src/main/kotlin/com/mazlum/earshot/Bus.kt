@@ -18,6 +18,14 @@ object Bus {
     @Volatile var running: Boolean = false
         private set
 
+    /**
+     * Whether the microphone is gated. Recoverable like [running], and for the same reason plus a
+     * sharper one: mute can be flipped from the notification while the app is not on screen, so
+     * the UI cannot assume it still knows.
+     */
+    @Volatile var muted: Boolean = false
+        private set
+
     private fun post(event: Map<String, Any?>) {
         val s = sink ?: return
         main.post { s(event) }
@@ -25,7 +33,13 @@ object Bus {
 
     fun emitStarted(rate: Int, source: Int) {
         running = true
+        muted = false
         post(mapOf("event" to "started", "rate" to rate, "source" to source))
+    }
+
+    fun emitMuted(value: Boolean) {
+        muted = value
+        post(mapOf("event" to "muted", "muted" to value))
     }
 
     fun emitStats(packets: Long, bytes: Long, level: Float, rate: Int, source: Int) {
@@ -47,6 +61,7 @@ object Bus {
 
     fun emitStopped() {
         running = false
+        muted = false
         post(mapOf("event" to "stopped"))
     }
 }

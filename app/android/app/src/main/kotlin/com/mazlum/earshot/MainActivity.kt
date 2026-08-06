@@ -56,6 +56,16 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "isRunning" -> result.success(Bus.running)
+                    "isMuted" -> result.success(Bus.muted)
+
+                    "setMuted" -> {
+                        startService(
+                            Intent(this, MicService::class.java)
+                                .setAction(MicService.ACTION_MUTE)
+                                .putExtra(MicService.EXTRA_MUTED, call.argument<Boolean>("muted") ?: false)
+                        )
+                        result.success(true)
+                    }
 
                     "start" -> {
                         if (!hasMicPermission()) {

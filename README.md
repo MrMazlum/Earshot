@@ -319,10 +319,14 @@ in this mode — the audio goes to the virtual device instead. It stays until yo
 cargo run --release --bin earshot-tray -- --install
 ```
 
-Puts a microphone icon in the system tray and starts it at every login — on Windows too, where the
-same binary ships as `Earshot.exe`. Click it for the pairing code, whether the phone is connected,
-and a start/stop switch. The icon changes when audio is arriving. `--uninstall` removes the login
-item.
+Puts a microphone icon in the system tray and starts it at every login. Click it for the pairing
+code, whether the phone is connected, and a start/stop switch. The icon changes when audio is
+arriving. `--uninstall` removes the login item.
+
+On Windows the same binary ships as `Earshot.exe` and does this by itself: the first time it runs it
+copies itself into `%LOCALAPPDATA%\Earshot` and adds a `HKCU\...\Run` entry, the way Discord and
+Spotify do, so `--install` is only needed on Linux. First run only — untick "Start at login" in the
+menu and it stays unticked.
 
 On GNOME this needs the AppIndicator extension — Ubuntu turns it on by default.
 

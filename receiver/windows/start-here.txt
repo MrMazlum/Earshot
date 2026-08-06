@@ -52,6 +52,12 @@
   A notification pops up with your PAIRING CODE: nine digits.
   Lost it? Click the icon - it is in the menu, and clicking it copies it.
 
+  Earshot adds itself to Windows' startup list the first time you run it, so
+  it is already waiting the next time you turn the PC on - the same as
+  Discord or Spotify do. If you would rather it did not, click the icon and
+  untick "Start at login". It then stays off; Earshot only ever does this
+  once, and never puts itself back.
+
   Icon colours:
       grey    stopped
       blue    running, waiting for your phone

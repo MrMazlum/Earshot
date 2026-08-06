@@ -465,11 +465,7 @@ impl App {
                 }
             }
             ID_AUTOSTART => {
-                let extra = if self.config.virtual_mic {
-                    ""
-                } else {
-                    "--no-virtual-mic"
-                };
+                let extra = login_args(&self.config);
                 let result = if self.autostart {
                     autostart::disable().map(|_| None)
                 } else {
@@ -720,6 +716,18 @@ fn fatal_box(body: &str) {
     notify("Earshot", body, true);
 }
 
+/// The arguments the login item has to carry so the session it starts is the one running now.
+///
+/// Only the virtual microphone matters: everything else the tray does is either the default or
+/// discovered afresh at startup.
+fn login_args(config: &Config) -> &'static str {
+    if config.virtual_mic {
+        ""
+    } else {
+        "--no-virtual-mic"
+    }
+}
+
 /// Runs the tray until the user quits it. Returns the process exit code.
 pub fn run(config: Config, verbose: bool) -> i32 {
     let class = wide("EarshotTray");
@@ -773,6 +781,26 @@ pub fn run(config: Config, verbose: bool) -> i32 {
         make_icon(32, State::Connected),
     ];
 
+    // Windows users expect a tray program to be there again after a reboot — Discord and Spotify
+    // both add themselves to the startup list the first time they run — and a microphone that has
+    // to be started by hand every morning is a microphone that is missing when it is wanted. So the
+    // login item is created on first run instead of waiting to be asked for.
+    //
+    // Twice over, this is *first run only*: `is_first_run` is false forever afterwards, so turning
+    // "Start at login" off in the menu stays off rather than being undone at the next launch. And
+    // `--install` has already created the marker by the time this runs, so it is not done twice.
+    //
+    // It is also announced, below, rather than done quietly. Writing to somebody's Run key without
+    // saying so is the behaviour that earns tray applications their reputation, and the balloon
+    // costs one line.
+    let announce = if autostart::is_first_run() {
+        // A failure here costs the login item, not the session. There is no icon to complain
+        // through yet and nothing the user could usefully do, so the tray simply starts.
+        autostart::enable(login_args(&config)).ok()
+    } else {
+        None
+    };
+
     let mut app = App {
         config,
         engine: None,
@@ -792,6 +820,17 @@ pub fn run(config: Config, verbose: bool) -> i32 {
     // no icon to hang off is silently discarded -- which would have thrown away the first, and
     // most useful, notification of all.
     app.add_icon();
+    // After `add_icon`, for the reason given above it, and before `start`, so that a genuine
+    // startup failure gets the last balloon and therefore the one that stays on screen.
+    if let Some(i) = announce {
+        app.balloon(
+            "Earshot will start at login",
+            &format!(
+                "Installed to {}. Untick \"Start at login\" in this menu to stop it.",
+                i.binary.display()
+            ),
+        );
+    }
     app.start();
     app.redraw();
     // The first failure deserves saying out loud rather than waiting to be hovered over.

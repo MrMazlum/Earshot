@@ -36,18 +36,37 @@ class MicService : Service() {
     companion object {
         const val ACTION_START = "com.mazlum.earshot.START"
         const val ACTION_STOP = "com.mazlum.earshot.STOP"
+        const val ACTION_MUTE = "com.mazlum.earshot.MUTE"
         const val EXTRA_HOST = "host"
         const val EXTRA_PORT = "port"
         const val EXTRA_SOURCE = "source"
         const val EXTRA_RATE = "rate"
+        const val EXTRA_MUTED = "muted"
 
         private const val CHANNEL_ID = "earshot_session"
         private const val NOTIF_ID = 1
+
+        /** How often a keepalive goes out while muted. Protocol §7 says 1 s. */
+        private const val KEEPALIVE_NS = 1_000_000_000L
     }
 
     @Volatile private var running = false
+
+    /**
+     * Read by the capture thread once per frame, written by whoever taps Mute.
+     *
+     * Volatile rather than a lock on purpose: the capture thread must never wait on anything
+     * (Rules/no-blocking-audio-thread). A one-frame delay in noticing the flag is 20 ms and does
+     * not matter; a priority inversion would.
+     */
+    @Volatile private var muted = false
+
     private var worker: Thread? = null
     private var wifiLock: WifiManager.WifiLock? = null
+
+    /** Kept so the notification can be rebuilt when mute flips without re-reading the intent. */
+    private var streamHost: String = ""
+    private var streamPort: Int = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,12 +77,23 @@ class MicService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_MUTE -> {
+                // Only meaningful during a session. Arriving while idle is harmless — and must not
+                // call startForeground, exactly as ACTION_STOP does not.
+                if (running) setMuted(intent.getBooleanExtra(EXTRA_MUTED, !muted))
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 val host = intent.getStringExtra(EXTRA_HOST) ?: return START_NOT_STICKY
                 val port = intent.getIntExtra(EXTRA_PORT, 47811)
                 val source = intent.getIntExtra(EXTRA_SOURCE, 7) // VOICE_COMMUNICATION
                 val rate = intent.getIntExtra(EXTRA_RATE, Protocol.SAMPLE_RATE)
-                startForegroundCompat(host, port)
+                streamHost = host
+                streamPort = port
+                // Every session starts live. A mute carried over from last time would be a silent
+                // microphone that nobody asked for.
+                muted = false
+                startForegroundCompat()
                 startStreaming(host, port, source, rate)
             }
         }
@@ -77,7 +107,7 @@ class MicService : Service() {
 
     // ── Foreground plumbing ──────────────────────────────────────────────────
 
-    private fun startForegroundCompat(host: String, port: Int) {
+    private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
@@ -85,6 +115,22 @@ class MicService : Service() {
                     .apply { description = "Shown while your microphone is being streamed to your PC" }
             )
         }
+        val notif = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
+    }
+
+    /**
+     * The session notification, reflecting [muted].
+     *
+     * The notification is the only honest answer to "is this thing listening to me right now",
+     * because it is visible when the app is not (10-Working-Rules: the mic is live → persistent
+     * notification, visible mute). So mute is stated in the title, not merely offered as a button.
+     */
+    private fun buildNotification(): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -93,20 +139,47 @@ class MicService : Service() {
             this, 1, Intent(this, MicService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notif: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Earshot — microphone live")
-            .setContentText("Streaming to $host:$port")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        // The target state is written into the extra rather than left as a toggle, so a stale
+        // notification cannot flip mute the wrong way. FLAG_UPDATE_CURRENT refreshes it because
+        // this is rebuilt on every change.
+        val mute = PendingIntent.getService(
+            this, 2,
+            Intent(this, MicService::class.java)
+                .setAction(ACTION_MUTE)
+                .putExtra(EXTRA_MUTED, !muted),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(
+                if (muted) "Earshot — muted" else "Earshot — microphone live"
+            )
+            .setContentText(
+                if (muted) "Nothing is being sent to $streamHost:$streamPort"
+                else "Streaming to $streamHost:$streamPort"
+            )
+            .setSmallIcon(
+                if (muted) android.R.drawable.ic_lock_silent_mode
+                else android.R.drawable.ic_btn_speak_now
+            )
             .setOngoing(true)
             .setContentIntent(open)
+            .addAction(
+                Notification.Action.Builder(null, if (muted) "Unmute" else "Mute", mute).build()
+            )
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
             .build()
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIF_ID, notif)
-        }
+    /**
+     * Flips the gate. Called on the main thread only — the capture thread reads [muted] but never
+     * writes it, and never touches the notification or the Bus's main-thread handler.
+     */
+    private fun setMuted(value: Boolean) {
+        if (muted == value) return
+        muted = value
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIF_ID, buildNotification())
+        Bus.emitMuted(value)
     }
 
     private fun acquireWifiLock() {
@@ -153,12 +226,24 @@ class MicService : Service() {
                 val dgram = DatagramPacket(packet, packet.size, addr, port)
                 val ssrc = Random.nextInt()
 
+                // Muting sends these instead of audio, so the receiver's "connected" state and the
+                // NAT/firewall hole survive the silence (Protocol §7). Allocated once: the loop
+                // below must not allocate.
+                val keepalive = ByteArray(Protocol.HEADER_LEN)
+                val keepaliveDgram = DatagramPacket(keepalive, keepalive.size, addr, port)
+
                 var sequence = 0
                 var timestamp = 0
                 var packets = 0L
                 var bytes = 0L
                 var peak = 0
                 var lastReport = System.nanoTime()
+
+                // Mute bookkeeping, all thread-local — `muted` itself is the only shared word.
+                var wasMuted = false
+                var lastKeepalive = 0L
+                var keepaliveDue = false
+                var markNext = false
 
                 record.startRecording()
                 Bus.emitStarted(rate, source)
@@ -178,15 +263,65 @@ class MicService : Service() {
                         break
                     }
 
+                    // The frame is always read, even while muted: the blocking read is what paces
+                    // this loop at 20 ms, and letting AudioRecord's buffer overflow instead would
+                    // hand back stale audio the moment the user unmutes.
+                    val gated = muted
+                    if (gated != wasMuted) {
+                        wasMuted = gated
+                        // Tell the receiver immediately in either direction: a keepalive the
+                        // instant we go quiet, and MARK on the first frame of speech after it.
+                        if (gated) keepaliveDue = true else markNext = true
+                    }
+
+                    if (gated) {
+                        // The gate. The frame is simply never sent — the samples do not leave the
+                        // phone, which is the only thing that makes this button worth trusting.
+                        //
+                        // `sequence` deliberately does NOT advance. It is what the receiver's
+                        // reorder buffer counts by, so a frozen counter makes a mute look like a
+                        // contiguous stream that paused, rather than as many lost packets as the
+                        // mute was long.
+                        //
+                        // `timestamp` does advance: it is a sample clock, and Protocol §4 has it
+                        // surviving gaps.
+                        timestamp += frameSamples
+
+                        val now = System.nanoTime()
+                        if (keepaliveDue || now - lastKeepalive >= KEEPALIVE_NS) {
+                            Protocol.writeHeader(
+                                keepalive,
+                                type = Protocol.TYPE_KEEPALIVE,
+                                flags = 0,
+                                sequence = sequence,
+                                timestamp = timestamp,
+                                ssrc = ssrc,
+                            )
+                            sock.send(keepaliveDgram)
+                            lastKeepalive = now
+                            keepaliveDue = false
+                        }
+
+                        // A meter that still twitched while muted would make a mute bug look
+                        // normal, which is the one failure this feature cannot afford.
+                        peak = 0
+                        if (now - lastReport > 200_000_000L) {
+                            Bus.emitStats(packets, bytes, 0f, rate, source)
+                            lastReport = now
+                        }
+                        continue
+                    }
+
                     Protocol.writeHeader(
                         packet,
                         type = Protocol.TYPE_PCM_DEBUG,
-                        flags = 0,
+                        flags = if (markNext) Protocol.FLAG_MARK else 0,
                         sequence = sequence,
                         timestamp = timestamp,
                         ssrc = ssrc,
                     )
                     sock.send(dgram)
+                    markNext = false
 
                     sequence++
                     timestamp += frameSamples

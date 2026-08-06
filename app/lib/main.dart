@@ -116,6 +116,12 @@ class _SessionPageState extends State<SessionPage> {
   int _rate = 48000;
 
   bool _running = false;
+
+  /// The mic gate. Owned by the service, not by this screen — it can also be flipped from the
+  /// notification while the app is not on screen, so it always comes back over the event channel
+  /// rather than being set optimistically here.
+  bool _muted = false;
+
   int _packets = 0;
   int _bytes = 0;
   double _level = 0;
@@ -155,6 +161,7 @@ class _SessionPageState extends State<SessionPage> {
     try {
       final p = await _control.invokeMapMethod<String, dynamic>('getPrefs');
       final running = await _control.invokeMethod<bool>('isRunning') ?? false;
+      final muted = await _control.invokeMethod<bool>('isMuted') ?? false;
       if (!mounted || p == null) return;
       setState(() {
         _code.text = (p['code'] as String?) ?? '';
@@ -165,6 +172,7 @@ class _SessionPageState extends State<SessionPage> {
         _source = MicSource.usable((p['source'] as int?) ?? 7);
         _rate = (p['rate'] as int?) ?? 48000;
         _running = running;
+        _muted = running && muted;
       });
     } on PlatformException {
       // First run — defaults are fine.
@@ -177,10 +185,15 @@ class _SessionPageState extends State<SessionPage> {
       switch (event['event']) {
         case 'started':
           _running = true;
+          _muted = false;
           _error = null;
           _actualRate = (event['rate'] as int?) ?? 0;
           _packets = 0;
           _bytes = 0;
+          break;
+        case 'muted':
+          _muted = (event['muted'] as bool?) ?? false;
+          if (_muted) _level = 0;
           break;
         case 'stats':
           _packets = (event['packets'] as num?)?.toInt() ?? _packets;
@@ -191,9 +204,11 @@ class _SessionPageState extends State<SessionPage> {
         case 'error':
           _error = event['message'] as String?;
           _running = false;
+          _muted = false;
           break;
         case 'stopped':
           _running = false;
+          _muted = false;
           _level = 0;
           break;
       }
@@ -259,6 +274,13 @@ class _SessionPageState extends State<SessionPage> {
     } on PlatformException catch (e) {
       setState(() => _error = e.message);
     }
+  }
+
+  /// Asks the service to open or close the gate. The screen does not set `_muted` itself — it
+  /// waits for the service to confirm, so what is shown is what the microphone is actually doing.
+  Future<void> _toggleMute() async {
+    if (!_running) return;
+    await _control.invokeMethod('setMuted', {'muted': !_muted});
   }
 
   /// The explanations that used to sit permanently on the main screen. They are worth having and
@@ -349,7 +371,7 @@ class _SessionPageState extends State<SessionPage> {
         bottom: false,
         child: Column(
           children: [
-            _Header(live: _running),
+            _Header(live: _running, muted: _muted),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -357,9 +379,10 @@ class _SessionPageState extends State<SessionPage> {
                   _LevelMeter(
                     level: _level,
                     live: _running,
+                    muted: _muted,
                     // The numbers replace the caption rather than joining it: while streaming they
                     // are the thing worth reading, and telling someone to speak is not.
-                    metrics: _running
+                    metrics: _running && !_muted
                         ? '${(_actualRate / 1000).round()} kHz  ·  '
                             '$kbps kbps  ·  $_packets pkt'
                         : null,
@@ -470,8 +493,10 @@ class _SessionPageState extends State<SessionPage> {
       // underneath Android's navigation bar.
       bottomNavigationBar: _ActionBar(
         running: _running,
+        muted: _muted,
         error: _error,
         onPressed: _toggle,
+        onMute: _toggleMute,
         onOpenSettings: _permissionBlocked
             ? () => _control.invokeMethod('openAppSettings')
             : null,
@@ -624,9 +649,14 @@ class _AddressFields extends StatelessWidget {
   }
 }
 
+/// Amber, for the one state that is neither running nor stopped. Deliberately not the primary
+/// colour: muted must never be mistakable for live at a glance.
+const _mutedColour = Colors.amber;
+
 class _Header extends StatelessWidget {
   final bool live;
-  const _Header({required this.live});
+  final bool muted;
+  const _Header({required this.live, required this.muted});
 
   @override
   Widget build(BuildContext context) {
@@ -643,7 +673,7 @@ class _Header extends StatelessWidget {
                 ?.copyWith(fontWeight: FontWeight.w600),
           ),
           const Spacer(),
-          _LiveBadge(live: live),
+          _LiveBadge(live: live, muted: muted),
         ],
       ),
     );
@@ -652,12 +682,22 @@ class _Header extends StatelessWidget {
 
 class _LiveBadge extends StatelessWidget {
   final bool live;
-  const _LiveBadge({required this.live});
+  final bool muted;
+  const _LiveBadge({required this.live, required this.muted});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colour = live ? theme.colorScheme.primary : theme.disabledColor;
+    final colour = !live
+        ? theme.disabledColor
+        : muted
+            ? _mutedColour
+            : theme.colorScheme.primary;
+    final label = !live
+        ? 'IDLE'
+        : muted
+            ? 'MUTED'
+            : 'LIVE';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -674,7 +714,7 @@ class _LiveBadge extends StatelessWidget {
           ),
           const SizedBox(width: 7),
           Text(
-            live ? 'LIVE' : 'IDLE',
+            label,
             style: TextStyle(
               color: colour,
               fontSize: 11,
@@ -693,17 +733,25 @@ class _LiveBadge extends StatelessWidget {
 class _LevelMeter extends StatelessWidget {
   final double level;
   final bool live;
+  final bool muted;
 
-  /// Shown instead of the caption while streaming. Null when idle.
+  /// Shown instead of the caption while streaming. Null when idle or muted.
   final String? metrics;
-  const _LevelMeter({required this.level, required this.live, this.metrics});
+  const _LevelMeter({
+    required this.level,
+    required this.live,
+    required this.muted,
+    this.metrics,
+  });
 
   static const _segments = 26;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final lit = (level.clamp(0.0, 1.0) * _segments).round();
+    // Muted forces the meter flat rather than relying on the level happening to be zero. A meter
+    // that still moved while muted would make a mute bug look like normal operation.
+    final lit = muted ? 0 : (level.clamp(0.0, 1.0) * _segments).round();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -746,9 +794,9 @@ class _LevelMeter extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            metrics ?? 'Not streaming',
+            metrics ?? (muted ? 'Muted — nothing is being sent' : 'Not streaming'),
             style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.hintColor,
+              color: muted ? _mutedColour : theme.hintColor,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
@@ -840,15 +888,19 @@ class _Card extends StatelessWidget {
 /// The pinned bottom bar: the error, then the one button that matters.
 class _ActionBar extends StatelessWidget {
   final bool running;
+  final bool muted;
   final String? error;
   final VoidCallback onPressed;
+  final VoidCallback onMute;
 
   /// Only set when the error is one the user cannot clear from inside the app.
   final VoidCallback? onOpenSettings;
   const _ActionBar({
     required this.running,
+    required this.muted,
     required this.error,
     required this.onPressed,
+    required this.onMute,
     this.onOpenSettings,
   });
 
@@ -908,20 +960,71 @@ class _ActionBar extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
               ],
-              FilledButton.icon(
-                onPressed: onPressed,
-                icon: Icon(running ? Icons.stop_rounded : Icons.mic_rounded),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(56),
-                  backgroundColor: running ? theme.colorScheme.error : null,
-                  foregroundColor: running ? theme.colorScheme.onError : null,
-                  textStyle: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
+              // Idle, there is one thing to do. Live, mute is the button that gets pressed
+              // constantly and Stop is the one pressed once — so mute takes the width and the
+              // emphasis, and Stop is set apart where it cannot be hit by mistake.
+              if (!running)
+                FilledButton.icon(
+                  onPressed: onPressed,
+                  icon: const Icon(Icons.mic_rounded),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(56),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                  label: const Text('Start streaming'),
+                )
+              else
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: FilledButton.icon(
+                        onPressed: onMute,
+                        icon: Icon(
+                          muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                        ),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                          // Solid amber while muted: the state has to be readable across the room,
+                          // because the cost of misreading it is talking to nobody.
+                          backgroundColor: muted
+                              ? _mutedColour
+                              : theme.colorScheme.surfaceContainerHighest,
+                          foregroundColor:
+                              muted ? Colors.black : theme.colorScheme.onSurface,
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        label: Text(muted ? 'Unmute' : 'Mute'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: OutlinedButton.icon(
+                        onPressed: onPressed,
+                        icon: const Icon(Icons.stop_rounded),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                          foregroundColor: theme.colorScheme.error,
+                          side: BorderSide(
+                            color: theme.colorScheme.error.withValues(alpha: 0.5),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        label: const Text('Stop'),
+                      ),
+                    ),
+                  ],
                 ),
-                label: Text(running ? 'Stop' : 'Start streaming'),
-              ),
             ],
           ),
         ),

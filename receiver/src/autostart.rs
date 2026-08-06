@@ -315,6 +315,20 @@ pub fn installed_binary() -> Result<PathBuf, String> {
     platform::installed_binary()
 }
 
+/// Whether Earshot has never installed itself on this machine.
+///
+/// The installed copy is its own marker, so there is no second piece of state to keep in step. That
+/// is the whole point: [`enable`] creates it and only the user deleting it takes it away, so a
+/// caller that sets the login item up on first run does so exactly once. Switching "start at login"
+/// off in the tray leaves the copy behind — and therefore stays off, instead of being helpfully
+/// switched back on at the next launch.
+///
+/// A path that cannot even be worked out counts as "not the first run": there is nowhere to install
+/// to, so there is nothing useful to do about it.
+pub fn is_first_run() -> bool {
+    platform::installed_binary().is_ok_and(|p| !p.exists())
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "linux")]
