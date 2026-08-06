@@ -151,11 +151,25 @@ tray's *"It is not working..."* entry has this, and the console receiver prints 
 of silence. In an Administrator PowerShell:
 
 ```powershell
-New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow
+New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow -Profile Private -RemoteAddress LocalSubnet
 ```
 
 Then check this network is set to **Private**, not Public, in Windows settings — Public turns on the
-firewall's strictest profile. On Linux, if you run a firewall: `sudo ufw allow 47811/udp`.
+firewall's strictest profile, and the rule above deliberately does not apply there.
+
+The last two switches matter. Without them the rule is permanent, applies on every network profile
+and accepts from any source — so the next café Wi-Fi your laptop joins can reach a receiver that
+[does not check who is sending to it](SECURITY.md). Scoped this way, the opening closes again when
+you leave your own network.
+
+On Linux, if you run a firewall, scope it the same way rather than opening the port outright:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 47811 proto udp
+```
+
+That is the range home routers usually hand out. If your addresses start `10.` or `172.16`–`172.31`,
+use `10.0.0.0/8` or `172.16.0.0/12` instead — the receiver prints the address it is on.
 
 **Still nothing.** Guest Wi-Fi and "client isolation" block device-to-device traffic outright, and no
 firewall rule will help. Turning on your phone's hotspot and joining the PC to it rules that out in a
@@ -238,10 +252,19 @@ published here, or not claimed at all. It has not been measured, so it is not cl
 - **Nothing is collected.** No analytics, no crash reports, no tracking. The code is public so you
   can check that yourself
 - **The pairing code identifies a PC; it does not authenticate one.** Anyone already on your network
-  could send audio to a running receiver
-- **The audio is not encrypted yet.** It crosses your own Wi-Fi as plain samples.
-  [SECURITY.md](SECURITY.md) lists what Earshot does and does not promise, and how to report a
-  problem privately
+  can send audio to a receiver that is sitting idle. While a phone is actually streaming, packets
+  from anywhere else are ignored until it stops — which makes cutting into a live feed a deliberate
+  act rather than an accident, and is not the same as stopping it
+- **The audio is not encrypted.** It crosses your own Wi-Fi as plain samples, so anyone who has your
+  Wi-Fi password and cares to look can hear whatever your phone's microphone is picking up, for as
+  long as the app is streaming. On a home network that may be a trade you are happy with; it is worth
+  making on purpose rather than finding out later. Encryption is planned and is not written yet
+- **The Android APK on the releases page is signed with the Android debug key**, whose password is
+  a published constant. It is fine to sideload if you trust this repository, and it is not evidence
+  that you should — `cd app && flutter build apk --release` gives you the same app signed by you
+
+[SECURITY.md](SECURITY.md) has the full list of what Earshot does and does not promise, and how to
+report a problem privately.
 
 ## What works today
 

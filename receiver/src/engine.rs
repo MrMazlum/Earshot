@@ -407,6 +407,26 @@ fn setup(config: &Config) -> Result<Started, String> {
     Ok((socket, out, ready))
 }
 
+/// Whether a datagram from `from` is allowed in, given who is currently sending and whether that
+/// sender is still mid-stream.
+///
+/// This is the whole of Earshot's sender policy, which is why it is one named function rather than
+/// three lines buried in the receive loop. It is *not* authentication and cannot be: an attacker
+/// who spoofs the phone's source address still gets in, and until the audio is encrypted there is
+/// nothing to check anyone against. What it buys is that taking over a *live* microphone feed now
+/// requires that spoof, where before it took one packet from any address on the network - which
+/// both reassigned the peer and, carrying an unfamiliar SSRC, reset the reorder buffer.
+///
+/// `streaming` means "the last accepted packet arrived less than [`IDLE_AFTER`] ago" - the same
+/// silence that already means the phone stopped. So a phone that reconnects on a new source port
+/// is let back in within a second and a half rather than locked out of its own receiver.
+fn accepts_from(current: Option<SocketAddr>, from: SocketAddr, streaming: bool) -> bool {
+    match current {
+        Some(peer) if peer != from => !streaming,
+        _ => true,
+    }
+}
+
 fn pump(
     config: &Config,
     socket: &UdpSocket,
@@ -431,6 +451,8 @@ fn pump(
     let mut last_packet: Option<Instant> = None;
     let mut warned_opus = false;
     let mut warned_version = false;
+    let mut warned_intruder = false;
+    let mut intruders = 0u64;
 
     while !stop.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
@@ -451,7 +473,32 @@ fn pump(
                     }
                 };
 
-                if status.peer() != Some(from) {
+                // Nothing here authenticates a sender, and until the audio is encrypted nothing
+                // can. What it can refuse to do is be taken over mid-sentence: once a phone is
+                // streaming, datagrams from any other address are dropped until that stream has
+                // actually stopped. Without this, one packet from anywhere on the LAN both
+                // reassigns `peer` and - carrying a fresh SSRC - resets the reorder buffer, so an
+                // attacker replaces a live microphone feed rather than having to wait for an idle
+                // receiver. `IDLE_AFTER` is the same silence that already means "phone stopped", so
+                // a phone that genuinely reconnects on a new port is back in well under a second.
+                let current = status.peer();
+                let streaming = last_packet.is_some_and(|t| t.elapsed() < IDLE_AFTER);
+                if !accepts_from(current, from, streaming) {
+                    status.rejected.fetch_add(1, Ordering::Relaxed);
+                    intruders += 1;
+                    // `current` is always `Some` on this branch - that is the only way to be
+                    // refused. Matched rather than unwrapped anyway: this loop runs on packets an
+                    // attacker chooses, and a panic here would be the denial of service that the
+                    // rest of the receive path is written to avoid.
+                    if let (false, Some(peer)) = (warned_intruder, current) {
+                        warned_intruder = true;
+                        status.notice(format!(
+                            "! ignoring audio from {from} - {peer} is already sending"
+                        ));
+                    }
+                    continue;
+                }
+                if current != Some(from) {
                     *lock(&status.peer) = Some(from);
                     status.connected.store(true, Ordering::Relaxed);
                     status.notice(format!(">> phone connected: {from}"));
@@ -525,7 +572,16 @@ fn pump(
             if idle && status.connected.load(Ordering::Relaxed) {
                 status.connected.store(false, Ordering::Relaxed);
                 *lock(&status.peer) = None;
+                // The next session gets its own warning: one stray sender an hour ago should not
+                // silence the notice when it happens again to a different phone.
+                warned_intruder = false;
                 status.notice("... no packets for a moment (phone stopped, or Wi-Fi dropped)");
+            }
+            if intruders > 0 && config.verbose {
+                status.notice(format!(
+                    "  ({intruders} packets from an address other than the one sending)"
+                ));
+                intruders = 0;
             }
             if unsupported_type > 0 && config.verbose {
                 status.notice(format!(
@@ -724,6 +780,52 @@ mod tests {
         ];
         ips.sort_by_key(|ip| rank(*ip));
         assert_eq!(ips[0], Ipv4Addr::new(192, 168, 1, 42));
+    }
+
+    /// The address of a phone, and of somebody else on the same network.
+    fn addr(last: u8, port: u16) -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::new(192, 168, 1, last), port))
+    }
+
+    /// The reason this policy exists. A live stream is not interruptible by a stranger's packet:
+    /// before this, one datagram from anywhere on the LAN both became the peer and reset the
+    /// reorder buffer under it, so a microphone feed could be replaced rather than merely joined.
+    #[test]
+    fn a_stranger_cannot_cut_into_a_live_stream() {
+        let phone = addr(42, 50000);
+        let stranger = addr(99, 50000);
+        assert!(!accepts_from(Some(phone), stranger, true));
+    }
+
+    /// The same stranger is welcome once nothing is actually being sent - that is just the next
+    /// device to connect, which is a thing the user does on purpose.
+    #[test]
+    fn a_new_sender_is_taken_once_the_last_one_has_stopped() {
+        let phone = addr(42, 50000);
+        let other = addr(99, 50000);
+        assert!(accepts_from(Some(phone), other, false));
+        assert!(accepts_from(None, other, false));
+        // Nothing has ever arrived, so nothing is being defended yet.
+        assert!(accepts_from(None, other, true));
+    }
+
+    /// The phone already streaming must never be locked out by its own policy.
+    #[test]
+    fn the_sender_that_holds_the_stream_keeps_it() {
+        let phone = addr(42, 50000);
+        assert!(accepts_from(Some(phone), phone, true));
+        assert!(accepts_from(Some(phone), phone, false));
+    }
+
+    /// A different source *port* on the same host is a different sender: on a phone that is a
+    /// fresh socket after a reconnect, and there is no way to tell it apart from an intruder. It
+    /// waits out the idle window like anyone else, which is under two seconds.
+    #[test]
+    fn a_new_port_on_the_same_host_is_still_a_new_sender() {
+        let phone = addr(42, 50000);
+        let reconnected = addr(42, 50001);
+        assert!(!accepts_from(Some(phone), reconnected, true));
+        assert!(accepts_from(Some(phone), reconnected, false));
     }
 
     #[test]

@@ -35,7 +35,11 @@ pub fn nothing_arriving_hint(port: u16, windows: bool) -> String {
             "    Check the phone and this PC are on the same Wi-Fi, and that the code or".into(),
             "    address in the app matches the one above. If a firewall is running:".into(),
             String::new(),
-            format!("      sudo ufw allow {port}/udp"),
+            ufw_rule(port),
+            String::new(),
+            "    That opens the port to your own network only. If your addresses start".into(),
+            "    10. or 172.16-172.31 rather than 192.168, put that range in instead".into(),
+            "    (10.0.0.0/8 or 172.16.0.0/12) - the code above shows which you are on.".into(),
         ]);
     }
     lines.extend([
@@ -48,11 +52,31 @@ pub fn nothing_arriving_hint(port: u16, windows: bool) -> String {
 
 /// The one command that fixes the most common Windows failure. Indented to sit inside the hint;
 /// callers that want it on its own trim it.
+///
+/// `-Profile Private -RemoteAddress LocalSubnet` are not decoration. Without them the rule is
+/// permanent, applies on every network profile and accepts from any source, so the next coffee-shop
+/// Wi-Fi this laptop joins can reach a receiver that does not authenticate its sender. Scoped this
+/// way the hole closes when the machine leaves the network it was opened for. It also means the
+/// rule does nothing while Windows has the network marked Public - which is why every caller of
+/// this says "set the network to Private" in the next breath.
+///
+/// One physical line: this is pasted into a console, and a backtick continuation that loses its
+/// trailing space on the way through a message box fails in a way nobody can read.
 pub fn firewall_rule(port: u16) -> String {
     format!(
         "      New-NetFirewallRule -DisplayName Earshot -Direction Inbound \
-         -Protocol UDP -LocalPort {port} -Action Allow"
+         -Protocol UDP -LocalPort {port} -Action Allow \
+         -Profile Private -RemoteAddress LocalSubnet"
     )
+}
+
+/// The Linux equivalent, scoped the same way and for the same reason.
+///
+/// `ufw` has no `LocalSubnet` token, so the range has to be named. 192.168/16 is the one home
+/// routers hand out; the other two private blocks are spelled out by the caller rather than guessed
+/// at, because a rule that silently matches nothing is worse than no rule at all.
+pub fn ufw_rule(port: u16) -> String {
+    format!("      sudo ufw allow from 192.168.0.0/16 to any port {port} proto udp")
 }
 
 /// The tray's Help box: the same knowledge, laid out for a dialog rather than a scrolling terminal.
@@ -78,7 +102,13 @@ pub fn troubleshooting(port: u16, windows: bool) -> String {
             "Check the phone and this PC are on the same Wi-Fi, and that the code in\n\
              the app matches the one in this menu. If a firewall is running:\n\n",
         );
-        out.push_str(&format!("    sudo ufw allow {port}/udp\n\n"));
+        out.push_str(ufw_rule(port).trim_start());
+        out.push_str(
+            "\n\n\
+             That opens the port to your own network only. If your addresses start\n\
+             10. or 172.16-172.31 rather than 192.168, put that range in instead\n\
+             (10.0.0.0/8 or 172.16.0.0/12).\n\n",
+        );
     }
     out.push_str(
         "Still nothing?\n\
@@ -124,8 +154,64 @@ mod tests {
     #[test]
     fn the_linux_hint_does_not_tell_anyone_to_open_powershell() {
         let hint = nothing_arriving_hint(47811, false);
-        assert!(hint.contains("sudo ufw allow 47811/udp"), "{hint}");
+        assert!(hint.contains("port 47811 proto udp"), "{hint}");
         assert!(!hint.contains("PowerShell"), "{hint}");
+    }
+
+    /// The rules we hand out are scoped to the local network, and this is the test that keeps them
+    /// that way. A rule without these is permanent, matches every network profile and accepts from
+    /// any source - so the next public Wi-Fi this machine joins can reach a receiver that does not
+    /// authenticate whoever is sending to it. Widening it back is a one-word edit; this is what
+    /// makes that edit fail the build instead of shipping.
+    #[test]
+    fn the_rules_we_hand_out_are_scoped_to_the_local_network() {
+        let windows = firewall_rule(47811);
+        assert!(windows.contains("-Profile Private"), "{windows}");
+        assert!(windows.contains("-RemoteAddress LocalSubnet"), "{windows}");
+
+        let linux = ufw_rule(47811);
+        assert!(linux.contains("from 192.168.0.0/16"), "{linux}");
+        // `ufw allow 47811/udp` is the bare form, and it is open to the world.
+        assert!(!linux.contains("allow 47811/udp"), "{linux}");
+
+        // Both front-ends carry the scoping, not just the helper in isolation.
+        for text in [
+            nothing_arriving_hint(47811, true),
+            troubleshooting(47811, true),
+        ] {
+            assert!(text.contains("-RemoteAddress LocalSubnet"), "{text}");
+        }
+        for text in [
+            nothing_arriving_hint(47811, false),
+            troubleshooting(47811, false),
+        ] {
+            assert!(text.contains("from 192.168.0.0/16"), "{text}");
+        }
+    }
+
+    /// The scoped Windows rule only applies on a Private network, so telling somebody to paste it
+    /// without also telling them to check the profile hands them a rule that does nothing.
+    #[test]
+    fn the_windows_advice_mentions_the_private_profile_it_depends_on() {
+        for text in [
+            nothing_arriving_hint(47811, true),
+            troubleshooting(47811, true),
+        ] {
+            assert!(text.contains("Private"), "{text}");
+        }
+    }
+
+    /// A user on 10.x pastes a 192.168 rule, sees nothing change, and concludes the firewall was
+    /// not the problem. Naming the other two ranges is what stops that.
+    #[test]
+    fn the_linux_advice_names_the_other_private_ranges() {
+        for text in [
+            nothing_arriving_hint(47811, false),
+            troubleshooting(47811, false),
+        ] {
+            assert!(text.contains("10.0.0.0/8"), "{text}");
+            assert!(text.contains("172.16.0.0/12"), "{text}");
+        }
     }
 
     /// Both platforms share the closing paragraph: guest Wi-Fi defeats everything above it, and
@@ -149,6 +235,6 @@ mod tests {
     #[test]
     fn the_tray_help_carries_the_real_port_too() {
         assert!(troubleshooting(47899, true).contains("-LocalPort 47899"));
-        assert!(troubleshooting(47899, false).contains("47899/udp"));
+        assert!(troubleshooting(47899, false).contains("port 47899 proto udp"));
     }
 }

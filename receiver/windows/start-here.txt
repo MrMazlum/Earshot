@@ -108,10 +108,17 @@
     Right-click Start -> "Terminal (Admin)" or "Windows PowerShell (Admin)",
     then paste this one line:
 
-New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow
+New-NetFirewallRule -DisplayName Earshot -Direction Inbound -Protocol UDP -LocalPort 47811 -Action Allow -Profile Private -RemoteAddress LocalSubnet
 
     Then check this network is set to Private, not Public, in Windows
-    settings. Public turns on the firewall's strictest profile.
+    settings. Public turns on the firewall's strictest profile, and the
+    rule above deliberately does not apply there.
+
+    The last two switches matter. Without them the rule is permanent,
+    applies on every network profile and accepts from any source - so the
+    next public Wi-Fi this laptop joins can reach a receiver that does not
+    check who is sending to it. Scoped this way, the opening closes again
+    when you leave your own network.
 
   Discord hears silence, but the icon is green.
 

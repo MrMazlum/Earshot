@@ -19,7 +19,17 @@ pub struct SpscRing {
     tail: AtomicUsize,
 }
 
-// Safe because exactly one thread pushes and exactly one thread pops, and the indices are atomic.
+// SAFETY: single producer, single consumer, and the indices are atomic.
+//
+// The compiler does not check that discipline — this type hands out `&self` to both sides, so the
+// invariant is upheld by there being exactly two call sites and no others:
+//
+//   producer: `drain_reorder` in engine.rs, on the receive thread, the only caller of `push`
+//   consumer: `fill` in audio.rs, on the cpal callback thread, the only caller of `pop`
+//
+// A second pusher or a second popper would be a data race that still compiles, so adding one means
+// splitting this into owned `Producer`/`Consumer` halves first, so the type enforces what this
+// comment currently only asserts.
 unsafe impl Send for SpscRing {}
 unsafe impl Sync for SpscRing {}
 
