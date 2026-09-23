@@ -144,8 +144,26 @@ cosmetic change you can make yourself in fifteen seconds.
 
 ## Troubleshooting
 
-**The app says it's sending, the tray icon stays blue.**
-On Windows this is almost always the firewall: it drops incoming UDP for a program with no rule, and
+**Start with what the app itself says.** The phone shows `CONNECTED` only while the PC is actually
+answering it, and its Network card carries the rest: which network the phone is on, whether the PC's
+address is somewhere it could be reached from there, and how long ago the PC last replied.
+
+**"This phone is on mobile data" — and Start is greyed out.**
+Wi-Fi is off. The phone then has no route to a home address at all, and every packet is dropped
+before it leaves the handset. Turn Wi-Fi on and join the network your PC is on. This failure used to
+be invisible: the app streamed into nothing and said `LIVE` the whole time.
+
+**"A different network from your PC".** Both ends are on Wi-Fi, but not the same one — a guest
+network, or a second router. The app names both networks so you can see which is which. It does not
+stop you trying.
+
+**The phone says `NO ANSWER`, and the tray icon stays blue.**
+The microphone is leaving the phone and nothing is coming back. First check the halves match: the
+reply the phone waits for was added on both sides at the same time, so a **PC receiver older than
+the app never answers** and the phone says `NO ANSWER` even while the audio is arriving perfectly.
+Update the PC, or look at the tray icon to see whether it is in fact receiving.
+
+After that, on Windows this is almost always the firewall: it drops incoming UDP for a program with no rule, and
 the prompt that would have asked you needs an administrator, so it is often never shown at all. The
 tray's *"It is not working..."* entry has this, and the console receiver prints it after 25 seconds
 of silence. In an Administrator PowerShell:

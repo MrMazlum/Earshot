@@ -48,9 +48,28 @@ class MicService : Service() {
 
         /** How often a keepalive goes out while muted. Protocol §7 says 1 s. */
         private const val KEEPALIVE_NS = 1_000_000_000L
+
+        /**
+         * How long the reply listener waits before checking [running] again.
+         *
+         * It is the worst case for noticing a stop and nothing else — a timeout here is the normal
+         * state of a quiet PC, not an error.
+         */
+        private const val REPLY_TIMEOUT_MS = 400
     }
 
     @Volatile private var running = false
+
+    /**
+     * When the PC last answered, on the same clock the capture thread reads, or 0 for never.
+     *
+     * Written by the reply listener, read by the capture thread. This is the only evidence the
+     * phone has that its audio is arriving anywhere — see Protocol.TYPE_HELLO.
+     */
+    @Volatile private var lastReplyNs = 0L
+
+    /** How much audio the PC said it was holding, in tenths of a millisecond. */
+    @Volatile private var pcBufferedMsX10 = 0
 
     /**
      * Read by the capture thread once per frame, written by whoever taps Mute.
@@ -226,6 +245,12 @@ class MicService : Service() {
                 val dgram = DatagramPacket(packet, packet.size, addr, port)
                 val ssrc = Random.nextInt()
 
+                // Every session starts having heard nothing. Carrying the last one's reply over
+                // would show "connected" for three seconds against a PC that may not even be on.
+                lastReplyNs = 0L
+                pcBufferedMsX10 = 0
+                listenForReplies(sock, ssrc)
+
                 // Muting sends these instead of audio, so the receiver's "connected" state and the
                 // NAT/firewall hole survive the silence (Protocol §7). Allocated once: the loop
                 // below must not allocate.
@@ -306,7 +331,10 @@ class MicService : Service() {
                         // normal, which is the one failure this feature cannot afford.
                         peak = 0
                         if (now - lastReport > 200_000_000L) {
-                            Bus.emitStats(packets, bytes, 0f, rate, source)
+                            Bus.emitStats(
+                                packets, bytes, 0f, rate, source,
+                                answeredMsAgo(now), pcBufferedMsX10 / 10f,
+                            )
                             lastReport = now
                         }
                         continue
@@ -339,7 +367,10 @@ class MicService : Service() {
 
                     val now = System.nanoTime()
                     if (now - lastReport > 200_000_000L) { // 5 Hz — off the hot path, cheap
-                        Bus.emitStats(packets, bytes, peak / 32768f, rate, source)
+                        Bus.emitStats(
+                            packets, bytes, peak / 32768f, rate, source,
+                            answeredMsAgo(now), pcBufferedMsX10 / 10f,
+                        )
                         peak = 0
                         lastReport = now
                     }
@@ -353,6 +384,51 @@ class MicService : Service() {
                 Bus.emitStopped()
             }
         }
+    }
+
+    /**
+     * Listens for the PC's replies on the socket the audio is going out of.
+     *
+     * A thread of its own because the capture thread may not block on anything but the microphone
+     * read that paces it (Rules/no-blocking-audio-thread). All this one does is note the time; the
+     * capture thread reads that as one volatile word.
+     *
+     * The same socket both directions is the point, not an economy: the receiver replies to the
+     * source address and port of what it received, so a second socket would be answered on a port
+     * nothing is sending from.
+     *
+     * Not joined on stop. Closing the socket makes the blocking read throw, which ends the thread
+     * within [REPLY_TIMEOUT_MS] anyway, and the capture thread must not wait for it.
+     */
+    private fun listenForReplies(socket: DatagramSocket, ssrc: Int) {
+        thread(name = "earshot-replies", isDaemon = true) {
+            val buf = ByteArray(64)
+            val incoming = DatagramPacket(buf, buf.size)
+            try {
+                socket.soTimeout = REPLY_TIMEOUT_MS
+                while (running) {
+                    try {
+                        socket.receive(incoming)
+                    } catch (_: java.net.SocketTimeoutException) {
+                        continue // a quiet PC, which is a state and not a failure
+                    }
+                    // Anyone on the network can send here. parseHello checks the magic, the
+                    // version, the type and — the one that matters — that the ssrc is this
+                    // session's own, so another phone's reply is not read as evidence about ours.
+                    val hello = Protocol.parseHello(buf, incoming.length, ssrc) ?: continue
+                    pcBufferedMsX10 = hello.bufferedMsX10
+                    lastReplyNs = System.nanoTime()
+                }
+            } catch (_: Throwable) {
+                // The socket was closed under us, which is how a session ends.
+            }
+        }
+    }
+
+    /** Milliseconds since the PC last answered, or -1 if it never has. */
+    private fun answeredMsAgo(now: Long): Long {
+        val last = lastReplyNs
+        return if (last == 0L) -1L else (now - last) / 1_000_000L
     }
 
     private fun openRecorder(source: Int, rate: Int): AudioRecord? {

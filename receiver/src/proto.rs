@@ -14,6 +14,13 @@ pub const TYPE_DTX: u8 = 1;
 pub const TYPE_KEEPALIVE: u8 = 2;
 /// Raw s16le mono, and what ships today. Roughly 770 kbps; Opus replaces it.
 pub const TYPE_PCM_DEBUG: u8 = 3;
+/// The one packet that travels PC -> phone: header only, no payload.
+///
+/// It is what lets the phone tell "my audio is arriving" from "my audio is going nowhere", which
+/// `send()` cannot: a datagram leaving down an interface with no route to the PC succeeds exactly
+/// like one that gets there. `protocol/README.md` has the field meanings, which are borrowed for
+/// this type and are not the usual ones.
+pub const TYPE_HELLO: u8 = 4;
 
 pub const FLAG_FEC: u8 = 0x01;
 pub const FLAG_ENC: u8 = 0x02;
@@ -70,6 +77,26 @@ impl Header {
             ssrc: u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
         };
         Ok((header, &buf[HEADER_LEN..]))
+    }
+}
+
+/// The reply to a datagram from the phone.
+///
+/// Both numbers it carries are echoes or gauges rather than the fields' usual meanings, and that
+/// is why building one lives here next to the parser instead of in the receive loop: the phone
+/// reads these three values, so there must be exactly one place that decides what they hold.
+///
+/// `buffered_ms` goes out in tenths of a millisecond, which keeps a useful figure inside a u32
+/// without inventing a float encoding for one packet a second. A NaN or a negative reads as zero:
+/// float-to-integer casts saturate in Rust, and a nonsense buffer depth must not become a huge one.
+pub fn hello(answering: &Header, buffered_ms: f32) -> Header {
+    Header {
+        version: VERSION,
+        ptype: TYPE_HELLO,
+        flags: 0,
+        sequence: answering.sequence,
+        timestamp: (buffered_ms * 10.0) as u32,
+        ssrc: answering.ssrc,
     }
 }
 
@@ -142,6 +169,40 @@ mod tests {
                 0xDE, 0xAD, 0xBE, 0xEF, // ssrc
             ]
         );
+    }
+
+    /// The phone matches a reply to its own session by the echoed ssrc, and would show a wrong
+    /// buffer depth if the tenths were dropped. Both are the whole content of the packet.
+    #[test]
+    fn a_hello_echoes_the_phone_back_to_itself() {
+        let asked = sample_header();
+        let reply = hello(&asked, 60.5);
+
+        assert_eq!(reply.ptype, TYPE_HELLO);
+        assert_eq!(reply.version, VERSION);
+        assert_eq!(reply.flags, 0);
+        assert_eq!(reply.sequence, asked.sequence);
+        assert_eq!(reply.ssrc, asked.ssrc);
+        assert_eq!(reply.timestamp, 605);
+    }
+
+    /// A buffer depth arriving as NaN or negative is a bug somewhere upstream; it must not turn
+    /// into an enormous number on the phone's screen.
+    #[test]
+    fn a_nonsense_buffer_depth_reads_as_zero() {
+        let asked = sample_header();
+        assert_eq!(hello(&asked, f32::NAN).timestamp, 0);
+        assert_eq!(hello(&asked, -3.0).timestamp, 0);
+        assert_eq!(hello(&asked, f32::INFINITY).timestamp, u32::MAX);
+    }
+
+    /// A reply is 16 bytes, and every packet that earns one is at least 16 bytes. That inequality
+    /// is what stops the receiver being usable as a reflector, so it is a test and not a comment.
+    #[test]
+    fn a_hello_is_never_larger_than_what_provoked_it() {
+        let mut buf = [0u8; HEADER_LEN];
+        let written = hello(&sample_header(), 0.0).write(&mut buf);
+        assert_eq!(written, HEADER_LEN);
     }
 
     #[test]

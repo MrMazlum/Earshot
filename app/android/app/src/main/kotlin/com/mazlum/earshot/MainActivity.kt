@@ -28,6 +28,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Watched from here rather than from the service, because the question it answers — can
+        // this phone reach that PC at all — is asked before anything is started.
+        NetworkWatch.start(this)
+
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -57,6 +61,26 @@ class MainActivity : FlutterActivity() {
                     }
                     "isRunning" -> result.success(Bus.running)
                     "isMuted" -> result.success(Bus.muted)
+
+                    "getNetwork" -> {
+                        // Re-read rather than trusting the cache: the screen may have been away
+                        // for hours, and this is the answer to "why is nothing arriving".
+                        NetworkWatch.refresh()
+                        result.success(NetworkWatch.snapshot())
+                    }
+
+                    "openWifiSettings" -> {
+                        // On Android 10+ the panel slides over the app, so a network is picked and
+                        // the user is straight back here. Older phones get the settings screen.
+                        startActivity(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                Intent(Settings.Panel.ACTION_WIFI)
+                            } else {
+                                Intent(Settings.ACTION_WIFI_SETTINGS)
+                            }
+                        )
+                        result.success(true)
+                    }
 
                     "setMuted" -> {
                         startService(
@@ -119,6 +143,14 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onDestroy() {
+        // The callback outlives the activity otherwise, and activities are recreated freely.
+        // A stream that is still running does not need it: it reports what the PC says, not what
+        // the phone's radio is doing.
+        NetworkWatch.stop()
+        super.onDestroy()
     }
 
     private fun hasMicPermission(): Boolean =

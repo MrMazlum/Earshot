@@ -30,6 +30,16 @@ object Protocol {
     const val TYPE_KEEPALIVE = 2
     const val TYPE_PCM_DEBUG = 3 // s16le mono — dev builds only, never a release
 
+    /**
+     * The PC's reply, and the only packet that ever travels towards the phone.
+     *
+     * It is what makes "connected" answerable at all. A UDP `send` succeeds whether the datagram
+     * reaches the PC or leaves down an interface with no route to it — which is exactly what
+     * happens when the phone is on mobile data and the PC is a `192.168.x.x` address. Without a
+     * reply the app cannot tell that apart from a working session, and it used to claim the latter.
+     */
+    const val TYPE_HELLO = 4
+
     const val FLAG_FEC = 0x01
     const val FLAG_ENC = 0x02
     const val FLAG_MARK = 0x04
@@ -40,6 +50,33 @@ object Protocol {
 
     /** Frame samples for a rate other than 48k (the phone may force 16k — see the AudioSource trap). */
     fun frameSamples(rate: Int): Int = rate / 1000 * FRAME_MS
+
+    /** What a [TYPE_HELLO] carries: an echo, and how much audio the PC is holding. */
+    data class Hello(val sequence: Int, val bufferedMsX10: Int)
+
+    /**
+     * Reads a datagram as the PC's reply to *this* session, or returns null.
+     *
+     * Every field is checked before anything is believed, because this is the first time the app
+     * has ever read from the network and the packet can come from anyone on the LAN. The ssrc test
+     * is the one that matters: it is random per session, so a reply belonging to another phone —
+     * or to this phone's previous run — is not evidence about the stream running now.
+     *
+     * The buffer depth arrives in tenths of a millisecond; see protocol/README.md, which is also
+     * where the fields are documented as deliberately meaning something else in this one type.
+     */
+    fun parseHello(buf: ByteArray, len: Int, ssrc: Int): Hello? {
+        if (len < HEADER_LEN) return null
+        if (buf[0] != MAGIC_0 || buf[1] != MAGIC_1) return null
+        val b2 = buf[2].toInt() and 0xFF
+        if ((b2 shr 4) != VERSION) return null
+        if ((b2 and 0x0F) != TYPE_HELLO) return null
+        val bb = ByteBuffer.wrap(buf, 0, HEADER_LEN).order(ByteOrder.BIG_ENDIAN)
+        val sequence = bb.getInt(4)
+        val bufferedMsX10 = bb.getInt(8)
+        if (bb.getInt(12) != ssrc) return null
+        return Hello(sequence, bufferedMsX10)
+    }
 
     /**
      * Writes the 16-byte header into [out] at offset 0. Big-endian (network order).

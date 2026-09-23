@@ -18,8 +18,13 @@ Audio travels over **UDP**, one 20 ms frame per datagram, never coalesced and **
 retransmitted**. A packet that arrives after its slot has played is discarded, not played late —
 waiting for it would put every later packet further behind for the rest of the call.
 
-The phone sends; the PC listens on port **47811** by default. There is no handshake, no
-registration and no reply: the first datagram to arrive is the stream.
+The phone sends; the PC listens on port **47811** by default. There is no handshake and no
+registration: the first datagram to arrive is the stream.
+
+The PC does send one thing back — a `HELLO`, about once a second, to whoever is currently sending.
+It carries no audio and no part of the audio path depends on it. It exists because without it the
+phone cannot tell "my packets are arriving" from "my packets are going nowhere": both look like a
+successful `send()`. See [The reply](#the-reply).
 
 ## Datagram layout
 
@@ -57,6 +62,7 @@ registration and no reply: the first datagram to arrive is the stream.
 | 1 | `DTX` | comfort noise / silence marker. Not implemented yet |
 | 2 | `KEEPALIVE` | empty. Counted as traffic, produces no audio |
 | 3 | `PCM_DEBUG` | raw s16le mono. What ships today |
+| 4 | `HELLO` | empty. **The only packet that travels PC → phone.** See [The reply](#the-reply) |
 
 ### Flags
 
@@ -82,6 +88,61 @@ chain at that rate, so the receiver resamples rather than refusing the stream.
 
 `PCM_DEBUG` is not a release format — it is roughly 770 kbps. Opus replaces it and brings that to
 about 32 kbps.
+
+## The reply
+
+A `HELLO` is 16 bytes: the header alone, no payload. It is the only packet that ever travels from
+the PC to the phone, and its three number fields are not the receiver's own — they are borrowed to
+answer the phone with:
+
+| Field | In a `HELLO` |
+|---|---|
+| sequence | the `sequence` of the packet being answered, echoed back |
+| timestamp | how much audio the receiver is holding, in **tenths of a millisecond** (so `605` is 60.5 ms). Not a sample count — this is the one packet where that field means something else |
+| ssrc | the phone's own `ssrc`, echoed back |
+
+### Why it exists
+
+A phone sending UDP learns nothing. `send()` succeeds whether the datagram reaches the PC, is
+swallowed by a firewall, or leaves down a cellular interface that has no route to `192.168.x.x` at
+all. That last one is not hypothetical: it is the failure that prompted this section, and from
+inside the app it looked exactly like a working session.
+
+So the phone shows "connected" only while `HELLO`s are arriving, and says so plainly when they stop.
+
+### Rules
+
+- The receiver replies **only to the address it is currently accepting audio from**, and only to a
+  datagram that already parsed and passed the sender check. Never to a malformed packet, never to a
+  rejected one
+- **At most one `HELLO` per second**, plus one immediately when a new sender is accepted, so the
+  phone's badge turns green at once rather than up to a second later
+- The reply goes to the datagram's source address and port, and nowhere else. No address is
+  remembered beyond the current peer
+- The phone **ignores a `HELLO` whose `ssrc` is not its own**. A reply meant for another session on
+  the same LAN is not evidence about this one
+- Nothing in the audio path may wait on a `HELLO`. A receiver that never sends one still works; a
+  phone that never sees one still streams
+
+This is deliberately not a heartbeat protocol with state on both ends. It is one packet a second in
+the quiet direction, and either side may ignore it entirely.
+
+### Reflection
+
+A `HELLO` is 16 bytes and every packet that earns one is at least 16 bytes, so this cannot amplify:
+the reply is never larger than what provoked it, and it is capped at one per second regardless. An
+attacker who spoofs a victim's address at an idle receiver gets one 16-byte datagram per second
+sent to that victim, which is not a capability worth having.
+
+### Old halves
+
+`HELLO` is an addition inside version **1**, not a new version, and both directions of mismatch are
+already handled:
+
+| | |
+|---|---|
+| New phone, old PC | no reply ever comes. The phone says *sending, but the PC is not answering* and names the likely cause. Audio still works if the PC is in fact receiving |
+| Old phone, new PC | the replies arrive at a socket the old app never reads, and the operating system discards them. Nothing changes |
 
 ## Rules a receiver must follow
 

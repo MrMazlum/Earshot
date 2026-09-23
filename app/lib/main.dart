@@ -18,11 +18,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'pairing.dart';
+import 'reachability.dart';
 
 void main() => runApp(const EarshotApp());
 
 const _control = MethodChannel('earshot/control');
 const _events = EventChannel('earshot/events');
+
+/// What is known about the PC at the other end.
+///
+/// "Streaming" and "connected" were the same word in this app once, and they are not the same
+/// thing: the phone can send perfectly well and be heard by nobody. Only [connected] means the PC
+/// answered — see `Protocol.TYPE_HELLO` and protocol/README.md.
+enum LinkState { idle, connecting, connected, noAnswer }
+
+/// The PC replies once a second, so three seconds of silence is two missed replies and then some.
+/// It is also how long a new session waits before it stops saying "connecting" and says the truth.
+const _answerTimeout = Duration(seconds: 3);
 
 /// Matches the icon in tools/icon/make_icons.py, so the app and its launcher icon agree.
 const _seed = Color(0xFF3DDC97);
@@ -85,6 +97,10 @@ class EarshotApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
+        // Named rather than left to the platform default, which is this same font on every Android
+        // phone. Saying it out loud is what lets test/gen_screens.dart register the real file and
+        // photograph readable words instead of a page of black boxes.
+        fontFamily: 'Roboto',
         scaffoldBackgroundColor: _backdrop,
         inputDecorationTheme: const InputDecorationTheme(
           border: OutlineInputBorder(),
@@ -128,6 +144,19 @@ class _SessionPageState extends State<SessionPage> {
   int _actualRate = 0;
   String? _error;
 
+  /// What the phone is attached to. Comes from Android, changes under us, and is the reason a
+  /// perfectly typed pairing code can still reach nothing.
+  NetworkState _net = NetworkState.unknown;
+
+  /// How long since the PC last answered, in milliseconds, or -1 if it never has this session.
+  int _answeredMsAgo = -1;
+
+  /// How much audio the PC said it was holding. Its own words, not a guess from here.
+  double _pcBufferedMs = 0;
+
+  /// When the current session started, so "no reply yet" can be told from "no reply, ever".
+  DateTime? _startedAt;
+
   /// True when the microphone was refused permanently, so the error needs a way out rather than
   /// an instruction to try again.
   bool _permissionBlocked = false;
@@ -157,13 +186,39 @@ class _SessionPageState extends State<SessionPage> {
     return resolvePairingCode(_code.text);
   }
 
+  /// What this phone can work out about reaching the PC before a packet is sent.
+  Reachability get _reach => reachability(_net, _target);
+
+  /// What the PC has actually said, which is the only thing that can mean "connected".
+  ///
+  /// A session that has heard nothing is *connecting* for [_answerTimeout] and then honest about
+  /// it. The distinction matters: the first second of any session has heard nothing either.
+  LinkState get _link {
+    if (!_running) return LinkState.idle;
+    final answered = _answeredMsAgo;
+    if (answered >= 0 && answered < _answerTimeout.inMilliseconds) {
+      return LinkState.connected;
+    }
+    final started = _startedAt;
+    if (answered < 0 &&
+        started != null &&
+        DateTime.now().difference(started) < _answerTimeout) {
+      return LinkState.connecting;
+    }
+    return LinkState.noAnswer;
+  }
+
   Future<void> _restore() async {
     try {
       final p = await _control.invokeMapMethod<String, dynamic>('getPrefs');
       final running = await _control.invokeMethod<bool>('isRunning') ?? false;
       final muted = await _control.invokeMethod<bool>('isMuted') ?? false;
+      // Asked for rather than waited for: the network only *changes* rarely, and a screen that
+      // opened to a blank verdict would be blank for as long as nothing changed.
+      final net = await _control.invokeMapMethod<String, dynamic>('getNetwork');
       if (!mounted || p == null) return;
       setState(() {
+        if (net != null) _net = NetworkState.fromMap(net);
         _code.text = (p['code'] as String?) ?? '';
         _manual = (p['manual'] as bool?) ?? false;
         _host.text = (p['host'] as String?) ?? '';
@@ -190,6 +245,13 @@ class _SessionPageState extends State<SessionPage> {
           _actualRate = (event['rate'] as int?) ?? 0;
           _packets = 0;
           _bytes = 0;
+          // A new session has heard nothing yet, whatever the last one heard.
+          _answeredMsAgo = -1;
+          _pcBufferedMs = 0;
+          _startedAt = DateTime.now();
+          break;
+        case 'network':
+          _net = NetworkState.fromMap(event);
           break;
         case 'muted':
           _muted = (event['muted'] as bool?) ?? false;
@@ -200,6 +262,8 @@ class _SessionPageState extends State<SessionPage> {
           _bytes = (event['bytes'] as num?)?.toInt() ?? _bytes;
           _level = (event['level'] as num?)?.toDouble() ?? 0;
           _actualRate = (event['rate'] as int?) ?? _actualRate;
+          _answeredMsAgo = (event['answeredMsAgo'] as num?)?.toInt() ?? -1;
+          _pcBufferedMs = (event['pcBufferedMs'] as num?)?.toDouble() ?? 0;
           break;
         case 'error':
           _error = event['message'] as String?;
@@ -210,6 +274,8 @@ class _SessionPageState extends State<SessionPage> {
           _running = false;
           _muted = false;
           _level = 0;
+          _answeredMsAgo = -1;
+          _startedAt = null;
           break;
       }
     });
@@ -232,6 +298,16 @@ class _SessionPageState extends State<SessionPage> {
               ? 'That is not a working pairing code. Check the nine digits '
                   'against the ones on your PC.'
               : 'Type the nine-digit pairing code your PC is showing.');
+      return;
+    }
+
+    // Re-read the network at the moment of the press. The card above may have been drawn before
+    // the user walked out of Wi-Fi range, and starting a session that cannot work is the whole
+    // failure this is here to stop.
+    await _refreshNetwork();
+    final blocked = _reach;
+    if (blocked.blocks) {
+      setState(() => _error = blocked.detail ?? blocked.headline);
       return;
     }
 
@@ -273,6 +349,16 @@ class _SessionPageState extends State<SessionPage> {
       setState(() => _error = null);
     } on PlatformException catch (e) {
       setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _refreshNetwork() async {
+    try {
+      final net = await _control.invokeMapMethod<String, dynamic>('getNetwork');
+      if (!mounted || net == null) return;
+      setState(() => _net = NetworkState.fromMap(net));
+    } on PlatformException {
+      // An older build of the app half; the verdict simply stays unknown.
     }
   }
 
@@ -371,7 +457,7 @@ class _SessionPageState extends State<SessionPage> {
         bottom: false,
         child: Column(
           children: [
-            _Header(live: _running, muted: _muted),
+            _Header(link: _link, muted: _muted),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -386,6 +472,16 @@ class _SessionPageState extends State<SessionPage> {
                         ? '${(_actualRate / 1000).round()} kHz  ·  '
                             '$kbps kbps  ·  $_packets pkt'
                         : null,
+                  ),
+                  const SizedBox(height: 14),
+                  // Above "Your PC" on purpose: it is the question asked first, and the one that
+                  // used to have no answer anywhere on this screen.
+                  _NetworkCard(
+                    reach: _reach,
+                    link: _link,
+                    answeredMsAgo: _answeredMsAgo,
+                    pcBufferedMs: _pcBufferedMs,
+                    onOpenWifi: () => _control.invokeMethod('openWifiSettings'),
                   ),
                   const SizedBox(height: 14),
                   _Card(
@@ -495,6 +591,9 @@ class _SessionPageState extends State<SessionPage> {
         running: _running,
         muted: _muted,
         error: _error,
+        // Greyed rather than allowed-and-then-refused: the card directly above says why, in full,
+        // and a button that can be pressed into a session that cannot work is what got us here.
+        canStart: !_reach.blocks,
         onPressed: _toggle,
         onMute: _toggleMute,
         onOpenSettings: _permissionBlocked
@@ -653,10 +752,188 @@ class _AddressFields extends StatelessWidget {
 /// colour: muted must never be mistakable for live at a glance.
 const _mutedColour = Colors.amber;
 
+/// The network card: where this phone is, whether the PC can be reached from there, and — once
+/// streaming — whether the PC is actually answering.
+///
+/// It sits above everything else because it is the first question, and because for one whole
+/// session it was a question this screen could not answer at all.
+class _NetworkCard extends StatelessWidget {
+  final Reachability reach;
+  final LinkState link;
+  final int answeredMsAgo;
+  final double pcBufferedMs;
+  final VoidCallback onOpenWifi;
+
+  const _NetworkCard({
+    required this.reach,
+    required this.link,
+    required this.answeredMsAgo,
+    required this.pcBufferedMs,
+    required this.onOpenWifi,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (reach.verdict == Reach.unknown && reach.headline.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final (icon, colour) = switch (reach.verdict) {
+      Reach.blocked => (Icons.error_outline, theme.colorScheme.error),
+      Reach.warn => (Icons.warning_amber_rounded, _mutedColour),
+      Reach.ok => (Icons.check_circle_outline, theme.colorScheme.primary),
+      Reach.unknown => (Icons.wifi_rounded, theme.hintColor),
+    };
+
+    return _Card(
+      title: 'Network',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 17, color: colour),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  reach.headline,
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: colour, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          if (reach.detail != null) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 27),
+              child: Text(
+                reach.detail!,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+              ),
+            ),
+          ],
+          if (reach.offerWifi) ...[
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(left: 19),
+              child: TextButton.icon(
+                onPressed: onOpenWifi,
+                icon: const Icon(Icons.wifi_rounded, size: 18),
+                label: const Text('Open Wi-Fi settings'),
+                style: TextButton.styleFrom(
+                  foregroundColor: colour,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
+          ],
+          // The second half of the answer, and the only one that is evidence rather than
+          // reasoning: what the PC itself has said, and how long ago it said it.
+          if (link != LinkState.idle) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1),
+            ),
+            _PcReply(
+              link: link,
+              answeredMsAgo: answeredMsAgo,
+              pcBufferedMs: pcBufferedMs,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// What the PC is saying back, in a sentence rather than a number.
+class _PcReply extends StatelessWidget {
+  final LinkState link;
+  final int answeredMsAgo;
+  final double pcBufferedMs;
+
+  const _PcReply({
+    required this.link,
+    required this.answeredMsAgo,
+    required this.pcBufferedMs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    final (icon, colour, headline, detail) = switch (link) {
+      LinkState.connected => (
+          Icons.check_circle_outline,
+          theme.colorScheme.primary,
+          'Your PC is hearing this',
+          'It answered ${_ago(answeredMsAgo)} ago'
+              '${pcBufferedMs > 0 ? ' · holding ${pcBufferedMs.toStringAsFixed(0)} ms' : ''}.',
+        ),
+      LinkState.connecting => (
+          Icons.hourglass_empty_rounded,
+          theme.hintColor,
+          'Waiting for your PC to answer',
+          null,
+        ),
+      LinkState.noAnswer => (
+          Icons.error_outline,
+          theme.colorScheme.error,
+          'Your PC is not answering',
+          'The microphone is being sent, but nothing is coming back. Check that Earshot is '
+              'running on the PC, and that this is the right pairing code.',
+        ),
+      LinkState.idle => (Icons.circle_outlined, theme.hintColor, '', null),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 17, color: colour),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                headline,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: colour, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        if (detail != null) ...[
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.only(left: 27),
+            child: Text(
+              detail,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Sub-second ages read as "a moment": nobody needs 240 ms, and a number that fast only draws
+  /// the eye to a figure that is changing five times a second.
+  static String _ago(int ms) {
+    if (ms < 0) return 'never';
+    if (ms < 1000) return 'a moment';
+    return '${(ms / 1000).toStringAsFixed(0)} s';
+  }
+}
+
 class _Header extends StatelessWidget {
-  final bool live;
+  final LinkState link;
   final bool muted;
-  const _Header({required this.live, required this.muted});
+  const _Header({required this.link, required this.muted});
 
   @override
   Widget build(BuildContext context) {
@@ -673,31 +950,35 @@ class _Header extends StatelessWidget {
                 ?.copyWith(fontWeight: FontWeight.w600),
           ),
           const Spacer(),
-          _LiveBadge(live: live, muted: muted),
+          _LiveBadge(link: link, muted: muted),
         ],
       ),
     );
   }
 }
 
+/// The word at the top of the screen.
+///
+/// It used to read LIVE the moment the microphone opened, which was true about the phone and told
+/// the user nothing about the PC — and on a session that reached nobody it was the most reassuring
+/// thing on the screen. Now it names the link: the microphone being open is the *least* of it.
 class _LiveBadge extends StatelessWidget {
-  final bool live;
+  final LinkState link;
   final bool muted;
-  const _LiveBadge({required this.live, required this.muted});
+  const _LiveBadge({required this.link, required this.muted});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colour = !live
-        ? theme.disabledColor
-        : muted
-            ? _mutedColour
-            : theme.colorScheme.primary;
-    final label = !live
-        ? 'IDLE'
-        : muted
-            ? 'MUTED'
-            : 'LIVE';
+    // Mute wins the badge while connected: it is the state most likely to be misread across a
+    // room, and its cost — talking to nobody — is the one this badge exists to prevent.
+    final (colour, label) = switch ((link, muted)) {
+      (LinkState.idle, _) => (theme.disabledColor, 'IDLE'),
+      (LinkState.noAnswer, _) => (theme.colorScheme.error, 'NO ANSWER'),
+      (LinkState.connecting, _) => (theme.hintColor, 'CONNECTING'),
+      (LinkState.connected, true) => (_mutedColour, 'MUTED'),
+      (LinkState.connected, false) => (theme.colorScheme.primary, 'CONNECTED'),
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -890,6 +1171,9 @@ class _ActionBar extends StatelessWidget {
   final bool running;
   final bool muted;
   final String? error;
+
+  /// False when the network makes a session impossible — see [Reachability.blocks].
+  final bool canStart;
   final VoidCallback onPressed;
   final VoidCallback onMute;
 
@@ -899,6 +1183,7 @@ class _ActionBar extends StatelessWidget {
     required this.running,
     required this.muted,
     required this.error,
+    required this.canStart,
     required this.onPressed,
     required this.onMute,
     this.onOpenSettings,
@@ -965,14 +1250,15 @@ class _ActionBar extends StatelessWidget {
               // emphasis, and Stop is set apart where it cannot be hit by mistake.
               if (!running)
                 FilledButton.icon(
-                  onPressed: onPressed,
+                  onPressed: canStart ? onPressed : null,
                   icon: const Icon(Icons.mic_rounded),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(56),
-                    textStyle: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    // From the theme, not a bare TextStyle: a button's textStyle replaces the
+                    // theme's outright rather than merging with it, so a hard-coded one silently
+                    // drops the font family with it.
+                    textStyle: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                   label: const Text('Start streaming'),
                 )
@@ -995,10 +1281,8 @@ class _ActionBar extends StatelessWidget {
                               : theme.colorScheme.surfaceContainerHighest,
                           foregroundColor:
                               muted ? Colors.black : theme.colorScheme.onSurface,
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          textStyle: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         label: Text(muted ? 'Unmute' : 'Mute'),
                       ),
@@ -1015,10 +1299,8 @@ class _ActionBar extends StatelessWidget {
                           side: BorderSide(
                             color: theme.colorScheme.error.withValues(alpha: 0.5),
                           ),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          textStyle: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         label: const Text('Stop'),
                       ),

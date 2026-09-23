@@ -42,7 +42,22 @@ object Bus {
         post(mapOf("event" to "muted", "muted" to value))
     }
 
-    fun emitStats(packets: Long, bytes: Long, level: Float, rate: Int, source: Int) {
+    /**
+     * [answeredMsAgo] is how long since the PC last replied, or -1 if it never has this session.
+     *
+     * It rides with the stats rather than being its own event because it is a gauge on the same
+     * clock, not a transition. What counts as *too* long is decided in one place in the UI, so the
+     * two halves of the app cannot drift apart on the threshold.
+     */
+    fun emitStats(
+        packets: Long,
+        bytes: Long,
+        level: Float,
+        rate: Int,
+        source: Int,
+        answeredMsAgo: Long,
+        pcBufferedMs: Float,
+    ) {
         post(
             mapOf(
                 "event" to "stats",
@@ -51,8 +66,15 @@ object Bus {
                 "level" to level,
                 "rate" to rate,
                 "source" to source,
+                "answeredMsAgo" to answeredMsAgo,
+                "pcBufferedMs" to pcBufferedMs,
             )
         )
+    }
+
+    /** The phone's own network changed. [NetworkWatch] owns the shape of [state]. */
+    fun emitNetwork(state: Map<String, Any?>) {
+        post(mapOf("event" to "network") + state)
     }
 
     fun emitError(message: String) {

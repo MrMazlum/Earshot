@@ -13,6 +13,11 @@
          listens for multicast, and a permission that is asked for but unused is a permission that
          should not be asked for. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- ACCESS_NETWORK_STATE is what lets the app say "your phone is on mobile data and your PC is
+         on a Wi-Fi you are not joined to" rather than streaming into nothing and looking healthy
+         doing it. It reads which network is the default one, and the address this phone holds on
+         it. It is not location: no SSID is read, and no location permission is asked for. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>

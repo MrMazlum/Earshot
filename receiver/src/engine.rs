@@ -30,6 +30,9 @@ const MAX_DATAGRAM: usize = 4096;
 const IDLE_AFTER: Duration = Duration::from_millis(1500);
 /// How often the loop wakes up when nothing is arriving — also the worst-case stop latency.
 const POLL: Duration = Duration::from_millis(200);
+/// How often the phone is told its audio is arriving. The phone gives up after three seconds of
+/// silence, so this has room for two lost replies before it says so.
+const HELLO_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -427,6 +430,26 @@ fn accepts_from(current: Option<SocketAddr>, from: SocketAddr, streaming: bool) 
     }
 }
 
+/// Whether to answer this packet with a [`proto::TYPE_HELLO`].
+///
+/// Named and separate for the same reason as [`accepts_from`]: it is a policy, it is the only
+/// thing that decides how much traffic this receiver can be made to emit, and both of those are
+/// worth testing directly. Protocol §The reply is the specification.
+///
+/// `new_peer` sends one immediately so the phone's badge turns green on the first packet rather
+/// than up to a second later. Otherwise it is one per second, which is enough for a phone that
+/// treats a three-second silence as "no answer" and cheap enough to be uninteresting to an
+/// attacker: the reply is 16 bytes and never larger than the packet that provoked it.
+fn hello_due(since_last: Option<Duration>, new_peer: bool) -> bool {
+    if new_peer {
+        return true;
+    }
+    match since_last {
+        None => true,
+        Some(elapsed) => elapsed >= HELLO_EVERY,
+    }
+}
+
 fn pump(
     config: &Config,
     socket: &UdpSocket,
@@ -449,6 +472,7 @@ fn pump(
     let mut unsupported_type = 0u64;
     let mut last_report = Instant::now();
     let mut last_packet: Option<Instant> = None;
+    let mut last_hello: Option<Instant> = None;
     let mut warned_opus = false;
     let mut warned_version = false;
     let mut warned_intruder = false;
@@ -498,11 +522,27 @@ fn pump(
                     }
                     continue;
                 }
-                if current != Some(from) {
+                let new_peer = current != Some(from);
+                if new_peer {
                     *lock(&status.peer) = Some(from);
                     status.connected.store(true, Ordering::Relaxed);
                     status.notice(format!(">> phone connected: {from}"));
                 }
+
+                // Answer the phone. This is the only traffic that leaves the receiver, and it only
+                // ever goes to the address whose packet was just accepted above — a malformed or
+                // refused datagram has already `continue`d and is never replied to.
+                //
+                // The error is dropped on purpose: a reply that cannot be sent is a nicety the
+                // phone will notice for itself, and it must not interrupt audio that is arriving
+                // perfectly well.
+                if hello_due(last_hello.map(|t: Instant| t.elapsed()), new_peer) {
+                    let mut reply = [0u8; proto::HEADER_LEN];
+                    proto::hello(&header, out.buffered_ms()).write(&mut reply);
+                    let _ = socket.send_to(&reply, from);
+                    last_hello = Some(Instant::now());
+                }
+
                 packets_in += 1;
                 bytes_in += n as u64;
                 status.packets.fetch_add(1, Ordering::Relaxed);
@@ -658,6 +698,41 @@ fn drain_reorder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phone's badge must go green on the first packet, not on the first whole second.
+    #[test]
+    fn a_new_phone_is_answered_at_once() {
+        assert!(hello_due(Some(Duration::from_millis(1)), true));
+        assert!(hello_due(None, false));
+    }
+
+    /// The cap is the whole of the reflection argument: without it, a flood of spoofed packets
+    /// becomes a flood of replies aimed at whoever was spoofed.
+    #[test]
+    fn a_phone_already_answered_waits_a_second() {
+        assert!(!hello_due(Some(Duration::from_millis(0)), false));
+        assert!(!hello_due(Some(Duration::from_millis(999)), false));
+        assert!(hello_due(Some(HELLO_EVERY), false));
+        assert!(hello_due(Some(Duration::from_secs(5)), false));
+    }
+
+    /// 50 packets a second arrive; at most one is answered. Written as the arithmetic it is, so a
+    /// later edit that answers every packet fails here rather than on someone's network.
+    #[test]
+    fn a_full_second_of_audio_earns_exactly_one_reply() {
+        let mut replies = 0;
+        let mut since_last: Option<Duration> = None;
+        for packet in 0..50u32 {
+            // One 20 ms frame per packet, one sender throughout.
+            if hello_due(since_last, packet == 0) {
+                replies += 1;
+                since_last = Some(Duration::ZERO);
+            } else if let Some(d) = since_last {
+                since_last = Some(d + Duration::from_millis(20));
+            }
+        }
+        assert_eq!(replies, 1);
+    }
 
     #[test]
     fn notices_are_drained_not_accumulated() {
