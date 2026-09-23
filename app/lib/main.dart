@@ -885,7 +885,8 @@ class _PcReply extends StatelessWidget {
           theme.colorScheme.error,
           'Your PC is not answering',
           'The microphone is being sent, but nothing is coming back. Check that Earshot is '
-              'running on the PC, and that this is the right pairing code.',
+              'running on the PC, and that this is the right pairing code. An Earshot on the PC '
+              'older than this app never answers — the sound still works, but this cannot tell.',
         ),
       LinkState.idle => (Icons.circle_outlined, theme.hintColor, '', null),
     };
