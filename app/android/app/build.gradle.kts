@@ -43,6 +43,24 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // libopus and the JNI shim around it. See src/main/cpp/CMakeLists.txt for why the real
+        // library is bundled rather than Android's own Opus encoder being used.
+        externalNativeBuild {
+            cmake {
+                // Release flags even in a debug build: this runs on the audio path, and a debug
+                // libopus is slow enough to matter on a phone.
+                cppFlags += "-O2"
+                arguments += "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {

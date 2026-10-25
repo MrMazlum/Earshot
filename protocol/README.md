@@ -58,19 +58,56 @@ successful `send()`. See [The reply](#the-reply).
 
 | Value | Name | Payload |
 |---|---|---|
-| 0 | `OPUS` | one Opus frame. **Not implemented yet** — the receiver says so and drops it |
+| 0 | `OPUS` | one Opus frame, mono. **What ships today** |
 | 1 | `DTX` | comfort noise / silence marker. Not implemented yet |
 | 2 | `KEEPALIVE` | empty. Counted as traffic, produces no audio |
-| 3 | `PCM_DEBUG` | raw s16le mono. What ships today |
+| 3 | `PCM_DEBUG` | raw s16le mono. The fallback for a phone that cannot compress |
 | 4 | `HELLO` | empty. **The only packet that travels PC → phone.** See [The reply](#the-reply) |
 
 ### Flags
 
 | Bit | Name | Meaning |
 |---|---|---|
-| `0x01` | `FEC` | payload carries forward error correction. Not implemented yet |
+| `0x01` | `FEC` | unused. Opus carries its redundant copies inside the packet, so recovery needs no flag |
 | `0x02` | `ENC` | payload is encrypted. Not implemented yet |
 | `0x04` | `MARK` | first packet after a silence |
+
+### One stream, one format
+
+A stream is either Opus or raw PCM for its whole life. The receiver reads the format from the first
+audio packet of a session and keeps a decoder for it; a type that changes mid-stream throws that
+decoder away and says so, because its state describes the audio it has already heard.
+
+The phone decides at the start of a session and does not change its mind. If it cannot compress —
+no bundled libopus for its processor, or a capture rate Opus does not take — it sends `PCM_DEBUG`
+for the whole session instead. **Compression is an improvement, never a requirement.**
+
+### An Opus payload says its own length
+
+An `OPUS` payload is one Opus frame and nothing else: no container, no length prefix, no
+identification header. The frame's first byte says how long it decodes to, which is what the
+receiver reads — so unlike raw PCM, the datagram's length tells you nothing about the audio.
+
+The receiver always decodes at **48 kHz**, whatever rate the phone captured at. Opus works at
+48 kHz internally and resamples better than we would, so a 16 kHz capture is handed to it as 16 kHz
+and comes back as 48 kHz with no resampling of ours in the path at all.
+
+About **32–40 kbps** for a voice, against roughly 770 for the same voice as raw PCM.
+
+### A lost Opus frame is rebuilt or invented, not silenced
+
+Two things become possible once the audio is compressed, and the receiver does both:
+
+- **Forward error correction.** Each packet can carry a coarse copy of the frame before it. When a
+  frame is declared lost and the *next* one is already waiting, the receiver rebuilds the missing
+  frame from that copy. The encoder decides whether to spend the bits; `OPUS_SET_PACKET_LOSS_PERC`
+  on the phone is set to 5, which is the budget, not a measurement.
+- **Concealment.** Failing that, the decoder is told a frame is missing and invents a plausible one
+  from what it has just heard. The raw-PCM path can only push in a frame of silence, which is
+  audible as a click.
+
+The `FEC` flag is **not** used for this and remains unimplemented: recovery is read out of the
+packet itself, so no flag has to be set for it to work.
 
 ### Raw PCM is self-describing
 
@@ -86,8 +123,8 @@ The receiver accepts any even length that works out to 8 000–48 000 Hz and rej
 16 kHz turns up on its own: some Android `AudioSource` values only offer the noise-cancelled voice
 chain at that rate, so the receiver resamples rather than refusing the stream.
 
-`PCM_DEBUG` is not a release format — it is roughly 770 kbps. Opus replaces it and brings that to
-about 32 kbps.
+`PCM_DEBUG` is the fallback, not the format: it is roughly 770 kbps, against 32–40 for the same
+voice through Opus. Any build that can compress does.
 
 ## The reply
 

@@ -221,6 +221,7 @@ class MicService : Service() {
         worker = thread(name = "earshot-capture", priority = Thread.MAX_PRIORITY) {
             var record: AudioRecord? = null
             var socket: DatagramSocket? = null
+            var encoder: OpusEncoder? = null
             try {
                 // Try the requested rate, then 16 kHz. Some devices only give the noise-cancelled
                 // voice chain at 16 kHz — that is exactly what P0.1 is measuring.
@@ -244,6 +245,20 @@ class MicService : Service() {
                 socket = sock
                 val dgram = DatagramPacket(packet, packet.size, addr, port)
                 val ssrc = Random.nextInt()
+
+                // Compression, when this build and this capture rate allow it. Null means the
+                // stream goes out as raw audio exactly as it always did -- see OpusEncoder.
+                encoder = OpusEncoder.create(rate)
+                val opus = encoder
+                // Allocated here because the loop below must not allocate: the samples as whole
+                // numbers, and a packet with room for the largest Opus frame after its header.
+                val shorts = if (opus != null) ShortArray(frameSamples) else ShortArray(0)
+                val opusPacket = if (opus != null) {
+                    ByteArray(Protocol.HEADER_LEN + OpusEncoder.MAX_PACKET_BYTES)
+                } else {
+                    ByteArray(0)
+                }
+                val opusDgram = DatagramPacket(opusPacket, opusPacket.size, addr, port)
 
                 // Every session starts having heard nothing. Carrying the last one's reply over
                 // would show "connected" for three seconds against a PC that may not even be on.
@@ -340,21 +355,60 @@ class MicService : Service() {
                         continue
                     }
 
-                    Protocol.writeHeader(
-                        packet,
-                        type = Protocol.TYPE_PCM_DEBUG,
-                        flags = if (markNext) Protocol.FLAG_MARK else 0,
-                        sequence = sequence,
-                        timestamp = timestamp,
-                        ssrc = ssrc,
-                    )
-                    sock.send(dgram)
-                    markNext = false
+                    // One frame out, compressed if this session can compress. The two paths
+                    // differ only in what the payload is and how long it is; everything the
+                    // receiver counts by -- sequence, timestamp, ssrc -- is identical, which is
+                    // why a stream can be either without the receiver needing to be told twice.
+                    var length = 0
+                    if (opus != null) {
+                        // The frame was read as bytes, because that is what the meter below and
+                        // the raw path both want. Opus wants whole samples.
+                        var si = 0
+                        var bi = Protocol.HEADER_LEN
+                        while (si < frameSamples) {
+                            shorts[si] =
+                                ((packet[bi].toInt() and 0xFF) or (packet[bi + 1].toInt() shl 8))
+                                    .toShort()
+                            si++
+                            bi += 2
+                        }
+                        val written = opus.encode(shorts, frameSamples, opusPacket, Protocol.HEADER_LEN)
+                        if (written > 0) {
+                            Protocol.writeHeader(
+                                opusPacket,
+                                type = Protocol.TYPE_OPUS,
+                                flags = if (markNext) Protocol.FLAG_MARK else 0,
+                                sequence = sequence,
+                                timestamp = timestamp,
+                                ssrc = ssrc,
+                            )
+                            length = Protocol.HEADER_LEN + written
+                            opusDgram.length = length
+                            sock.send(opusDgram)
+                        }
+                        // A refused frame is dropped rather than sent raw. Mixing formats inside
+                        // one stream would reset the receiver's decoder mid-sentence, which sounds
+                        // far worse than the 20 ms that went missing.
+                    } else {
+                        Protocol.writeHeader(
+                            packet,
+                            type = Protocol.TYPE_PCM_DEBUG,
+                            flags = if (markNext) Protocol.FLAG_MARK else 0,
+                            sequence = sequence,
+                            timestamp = timestamp,
+                            ssrc = ssrc,
+                        )
+                        length = packet.size
+                        sock.send(dgram)
+                    }
 
-                    sequence++
+                    if (length > 0) {
+                        markNext = false
+                        sequence++
+                        packets++
+                        bytes += length
+                    }
                     timestamp += frameSamples
-                    packets++
-                    bytes += packet.size
 
                     // Cheap peak meter: every 4th sample is plenty for a UI bar.
                     var i = Protocol.HEADER_LEN
@@ -381,6 +435,8 @@ class MicService : Service() {
                 try { record?.stop() } catch (_: Throwable) {}
                 record?.release()
                 socket?.close()
+                encoder?.close()
+                encoder = null
                 Bus.emitStopped()
             }
         }

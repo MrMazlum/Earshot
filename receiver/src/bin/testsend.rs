@@ -8,6 +8,7 @@
 //!     earshot-receiver
 //!     earshot-testsend --to 127.0.0.1:47811 --loss 5 --jitter 30
 
+use earshot::opus;
 use earshot::proto::{self, Header};
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -25,6 +26,7 @@ OPTIONS:
         --loss <PERCENT>   drop this share of packets     [default: 0]
         --jitter <MS>      random extra delay, and occasional reordering [default: 0]
         --tone <HZ>        test tone frequency     [default: 440]
+        --opus [<KBPS>]    send compressed Opus instead of raw PCM [default bitrate: 32]
     -h, --help             this text
 ";
 
@@ -52,6 +54,8 @@ struct Args {
     loss: f64,
     jitter_ms: u64,
     tone: f64,
+    /// `Some(bits per second)` to compress, `None` to send raw PCM like every build before Opus.
+    opus: Option<i32>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -62,6 +66,7 @@ fn parse_args() -> Result<Args, String> {
         loss: 0.0,
         jitter_ms: 0,
         tone: 440.0,
+        opus: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -77,6 +82,8 @@ fn parse_args() -> Result<Args, String> {
             "--loss" => a.loss = num(value("--loss")?, "--loss")? / 100.0,
             "--jitter" => a.jitter_ms = num(value("--jitter")?, "--jitter")? as u64,
             "--tone" => a.tone = num(value("--tone")?, "--tone")?,
+            "--opus" => a.opus = Some(32_000),
+            "--opus-kbps" => a.opus = Some(num(value("--opus-kbps")?, "--opus-kbps")? as i32 * 1000),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 std::process::exit(0);
@@ -119,10 +126,14 @@ fn run(args: &Args) -> Result<(), String> {
     };
 
     println!(
-        "sending {} Hz tone to {}  ({} Hz mono, {} ms frames, loss {:.0}%, jitter {} ms)",
+        "sending {} Hz tone to {}  ({} Hz mono, {}, {} ms frames, loss {:.0}%, jitter {} ms)",
         args.tone,
         args.to,
         args.rate,
+        match args.opus {
+            Some(bitrate) => format!("Opus at {} kbps", bitrate / 1000),
+            None => "raw PCM".to_string(),
+        },
         proto::FRAME_MS,
         args.loss * 100.0,
         args.jitter_ms
@@ -138,6 +149,13 @@ fn run(args: &Args) -> Result<(), String> {
     let mut rng = Rng(seed);
     let ssrc = 0xEA25_0000 | (rng.next_u32() & 0xFFFF);
     let mut packet = vec![0u8; proto::HEADER_LEN + frame_samples * 2];
+    // Only used on the Opus path, where the payload is built from whole samples and its length
+    // changes from frame to frame.
+    let mut samples = vec![0i16; frame_samples];
+    let mut encoder = match args.opus {
+        Some(bitrate) => Some(opus::Encoder::new(args.rate, bitrate)?),
+        None => None,
+    };
     let mut phase = 0.0f64;
     let step = std::f64::consts::TAU * args.tone / args.rate as f64;
 
@@ -153,19 +171,31 @@ fn run(args: &Args) -> Result<(), String> {
     for n in 0..total_frames {
         // A gentle envelope so the tone is obviously "a signal" and not a stuck buzzer.
         let env = 0.25 + 0.2 * (start.elapsed().as_secs_f64() * std::f64::consts::TAU / 3.0).sin();
-        for i in 0..frame_samples {
+        for (i, sample) in samples.iter_mut().enumerate() {
             let v = (phase.sin() * env * i16::MAX as f64) as i16;
             phase += step;
             if phase > std::f64::consts::TAU {
                 phase -= std::f64::consts::TAU;
             }
+            *sample = v;
             let off = proto::HEADER_LEN + i * 2;
             packet[off..off + 2].copy_from_slice(&v.to_le_bytes());
         }
 
+        // Compressing changes the payload length every frame, so the packet is rebuilt rather
+        // than written into in place.
+        if let Some(encoder) = encoder.as_mut() {
+            packet.truncate(proto::HEADER_LEN);
+            encoder.encode(&samples, &mut packet)?;
+        }
+
         let header = Header {
             version: proto::VERSION,
-            ptype: proto::TYPE_PCM_DEBUG,
+            ptype: if args.opus.is_some() {
+                proto::TYPE_OPUS
+            } else {
+                proto::TYPE_PCM_DEBUG
+            },
             flags: 0,
             sequence: n as u32,
             timestamp: (n as u32).wrapping_mul(frame_samples as u32),

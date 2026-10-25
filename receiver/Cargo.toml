@@ -11,6 +11,12 @@ repository = "https://github.com/MrMazlum/Earshot"
 
 [dependencies]
 cpal = "0.15"
+# Opus, the compressed format the phone sends. `opusic-sys` builds libopus from its own vendored
+# source with CMake and links it **statically**, which is why it is preferred over the crates that
+# expect a system libopus: the receiver stays a single file the user can run, and the Windows build
+# needs no vcpkg. CMake is the only new build-time requirement, and the Android SDK already ships
+# one on the dev box.
+opusic-sys = "0.7"
 # Enumerating local interfaces, which std cannot do. Needed because the default route is not the
 # LAN when a VPN is up (Cloudflare WARP, Tailscale) and we would otherwise tell the phone to
 # connect to an address it cannot reach. Tiny, no transitive deps beyond libc/windows-sys.

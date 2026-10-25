@@ -80,6 +80,16 @@ impl Reorder {
         self.slots.len()
     }
 
+    /// The payload held for one sequence number, without releasing it.
+    ///
+    /// Exists for forward error correction: a compressed packet can carry a coarse copy of the one
+    /// before it, so when a frame is declared lost the frame *after* it may be able to rebuild it —
+    /// and that one is usually already waiting here, since a gap is only declared once a backlog
+    /// has built up behind it.
+    pub fn peek(&self, sequence: u32) -> Option<&[u8]> {
+        self.slots.get(&sequence).map(|p| p.as_slice())
+    }
+
     /// Feeds one arrived packet in. Ignores packets from a different session.
     pub fn push(&mut self, ssrc: u32, sequence: u32, payload: &[u8]) {
         match self.ssrc {
@@ -281,7 +291,10 @@ mod tests {
         let mut releases = 0;
         while let Some(release) = r.pop() {
             releases += 1;
-            assert!(releases < 100, "pop is still declaring losses after {releases}");
+            assert!(
+                releases < 100,
+                "pop is still declaring losses after {releases}"
+            );
             if let Release::Frame(f) = release {
                 assert_eq!(f, frame(7));
             }
@@ -353,6 +366,9 @@ mod tests {
         assert_eq!(r.pop(), Some(Release::Frame(frame(1))));
         assert_eq!(r.pop(), Some(Release::Frame(frame(2))));
         assert_eq!(r.pop(), Some(Release::Frame(frame(3))));
-        assert_eq!(r.stats.too_late, 0, "the wrap must not look like an old packet");
+        assert_eq!(
+            r.stats.too_late, 0,
+            "the wrap must not look like an old packet"
+        );
     }
 }

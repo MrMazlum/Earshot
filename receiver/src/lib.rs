@@ -1,6 +1,7 @@
 //! Earshot receiver — the PC half of the bridge.
 //!
-//! Phone → UDP → [`proto`] parse → [`reorder`] window → [`resample`] → [`ring`] → [`audio`] out.
+//! Phone → UDP → [`proto`] parse → [`reorder`] window → [`opus`] decode → [`resample`] → [`ring`]
+//! → [`audio`] out. A raw-PCM stream skips the decode step; the format says which it is.
 //!
 //! [`engine`] wires that chain together and runs it. The two front-ends — `earshot-receiver` in a
 //! terminal, `earshot-tray` in the system tray — are both thin shells over it.
@@ -16,6 +17,8 @@ pub mod engine;
 /// The text every front-end shows when nothing is arriving. Shared so the Windows wording is
 /// testable on Linux.
 pub mod help;
+/// Opus, the compressed format the phone sends. libopus, built from source and linked statically.
+pub mod opus;
 pub mod pairing;
 pub mod proto;
 pub mod reorder;

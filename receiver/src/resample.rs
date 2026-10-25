@@ -87,9 +87,29 @@ pub fn s16le_to_f32(bytes: &[u8], out: &mut Vec<f32>) {
     }
 }
 
+/// The same conversion for samples that are already whole, which is what the Opus decoder hands
+/// back — there are no bytes to pair up on that path.
+pub fn i16_to_f32(samples: &[i16], out: &mut Vec<f32>) {
+    out.clear();
+    out.extend(samples.iter().map(|&v| v as f32 / 32768.0));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The PCM path and the Opus path must arrive at exactly the same numbers, or the same voice
+    /// would be a different loudness depending on the format it travelled in.
+    #[test]
+    fn both_conversions_agree() {
+        let samples = [0i16, 1, -1, 32767, -32768, 1234];
+        let bytes: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut from_bytes = Vec::new();
+        let mut from_samples = Vec::new();
+        s16le_to_f32(&bytes, &mut from_bytes);
+        i16_to_f32(&samples, &mut from_samples);
+        assert_eq!(from_bytes, from_samples);
+    }
 
     #[test]
     fn passthrough_is_exact() {
@@ -110,7 +130,10 @@ mod tests {
             let mut out = Vec::new();
             r.process(&input, &mut out);
             let n = out.len() as i64;
-            assert!((n - 960).abs() <= 3, "block {block} produced {n}, want ~960");
+            assert!(
+                (n - 960).abs() <= 3,
+                "block {block} produced {n}, want ~960"
+            );
         }
     }
 
@@ -139,7 +162,11 @@ mod tests {
         r.process(&[0.0, 1.0], &mut out);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], 0.0);
-        assert!((out[1] - 0.5).abs() < 1e-6, "halfway sample, got {}", out[1]);
+        assert!(
+            (out[1] - 0.5).abs() < 1e-6,
+            "halfway sample, got {}",
+            out[1]
+        );
 
         // The next block continues from 1.0 rather than jumping back — no click at the seam.
         out.clear();

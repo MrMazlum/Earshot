@@ -252,8 +252,9 @@ Voice chat is unusable if your words arrive late. So:
   make you fall further and further behind
 - **Small, fixed buffers**, and the delay they cost is on screen while it runs, in milliseconds
 
-Compression is the gap: it currently sends raw audio at about 770 kbps. **Opus** — the same codec
-Discord uses, at roughly 4 KB per second — is the next thing to land, and it is not in yet.
+- **Compressed with Opus** — the same codec Discord uses — at about 32–40 kbps, roughly 4 KB a
+  second. Earlier versions sent raw audio at about 770 kbps, which on a busy home network was the
+  loudest thing Earshot did. A phone that cannot compress still sends raw audio and still works
 
 **Target: under 100 ms** from your mouth to the other person's ear. That will be *measured* and
 published here, or not claimed at all. It has not been measured, so it is not claimed.
@@ -295,8 +296,8 @@ report a problem privately.
 | 🪟 **Windows** | works — audio arrives, VB-Cable path, tray icon | the input is VB-Audio's `CABLE Output` unless you rename it |
 | 🍎 **macOS** | nothing — never built, not in CI | not a priority. The code path exists: install BlackHole and use `--device` |
 
-**Also missing:** Opus compression (so it currently uses ~770 kbps instead of ~40), the PC → phone
-direction, automatic discovery, and encryption. Those are the next steps, in that order.
+**Also missing:** the PC → phone direction, automatic discovery, and encryption. Those are the next
+steps, in that order.
 
 **"Works" here means one person, one phone, two PCs.** It has not been through anyone else's Wi-Fi,
 router or sound card yet. If it breaks on yours, that is worth an issue — it is the kind of thing

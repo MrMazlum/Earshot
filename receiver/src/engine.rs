@@ -15,9 +15,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::audio;
+use crate::opus;
 use crate::proto::{self, Header, ParseError};
 use crate::reorder::{Release, Reorder};
-use crate::resample::{s16le_to_f32, Resampler};
+use crate::resample::{i16_to_f32, s16le_to_f32, Resampler};
 
 pub const DEFAULT_PORT: u16 = 47811;
 pub const DEFAULT_BUFFER_MS: u32 = 60;
@@ -89,6 +90,10 @@ pub struct Status {
     pub underruns: AtomicU64,
     pub ring_drops: AtomicU64,
     pub rejected: AtomicU64,
+    /// Frames that were lost on the network and rebuilt from the redundant copy in the next
+    /// packet. Only Opus can do this; a climbing count means the channel is dropping packets and
+    /// the codec is covering for it.
+    pub recovered: AtomicU64,
     /// Samples dropped to stop clock drift turning into unbounded latency. A steadily rising count
     /// means the two clocks disagree; a zero means they do not.
     pub trimmed: AtomicU64,
@@ -224,7 +229,17 @@ impl std::fmt::Display for LanAddress {
 /// These are *Linux* device names, matched at the start, where a name is short and the prefix is
 /// the whole identity of the thing (`docker0`, `wg0`, `virbr1`).
 const VIRTUAL_PREFIXES: &[&str] = &[
-    "virbr", "docker", "br-", "veth", "tun", "tap", "wg", "tailscale", "zt", "utun", "vmnet",
+    "virbr",
+    "docker",
+    "br-",
+    "veth",
+    "tun",
+    "tap",
+    "wg",
+    "tailscale",
+    "zt",
+    "utun",
+    "vmnet",
 ];
 
 /// The same idea for Windows, which needs its own list and its own matching rule.
@@ -400,7 +415,10 @@ fn setup(config: &Config) -> Result<Started, String> {
         .map_err(|e| format!("cannot set socket timeout: {e}"))?;
 
     let ready = Ready {
-        port: socket.local_addr().map(|a| a.port()).unwrap_or(DEFAULT_PORT),
+        port: socket
+            .local_addr()
+            .map(|a| a.port())
+            .unwrap_or(DEFAULT_PORT),
         out_device: out.device_name.clone(),
         out_rate: out.sample_rate,
         out_channels: out.channels,
@@ -466,6 +484,14 @@ fn pump(
     let mut buf = [0u8; MAX_DATAGRAM];
     let mut pcm = Vec::with_capacity(2048);
     let mut resampled = Vec::with_capacity(8192);
+    // Decoded Opus, before it becomes floats. Unused by a raw-PCM stream.
+    let mut decoded = Vec::with_capacity(opus::MAX_FRAME_SAMPLES);
+
+    // Which of the two audio formats this stream is in, and the decoder for it. Both are per
+    // stream, not per packet: a sender does not change format mid-sentence, and the decoder has to
+    // be thrown away if one somehow does, because its state describes the audio it has heard.
+    let mut kind: Option<Kind> = None;
+    let mut decoder: Option<opus::Decoder> = None;
 
     let mut bytes_in = 0u64;
     let mut packets_in = 0u64;
@@ -473,7 +499,6 @@ fn pump(
     let mut last_report = Instant::now();
     let mut last_packet: Option<Instant> = None;
     let mut last_hello: Option<Instant> = None;
-    let mut warned_opus = false;
     let mut warned_version = false;
     let mut warned_intruder = false;
     let mut intruders = 0u64;
@@ -549,17 +574,19 @@ fn pump(
                 last_packet = Some(Instant::now());
 
                 match header.ptype {
-                    proto::TYPE_PCM_DEBUG => reorder.push(header.ssrc, header.sequence, payload),
-                    proto::TYPE_KEEPALIVE => {}
-                    proto::TYPE_OPUS => {
-                        unsupported_type += 1;
-                        if !warned_opus {
-                            warned_opus = true;
-                            status.notice(
-                                "! the phone is sending Opus; this build only decodes raw PCM",
-                            );
+                    proto::TYPE_PCM_DEBUG | proto::TYPE_OPUS => {
+                        let arriving = Kind::of(header.ptype).expect("both arms are audio types");
+                        if kind != Some(arriving) {
+                            // Includes the very first audio packet of a session, which is where
+                            // the format gets announced.
+                            kind = Some(arriving);
+                            decoder = None;
+                            resampler = Resampler::new(0, out.sample_rate);
+                            status.notice(format!("   the phone is sending {arriving}"));
                         }
+                        reorder.push(header.ssrc, header.sequence, payload);
                     }
+                    proto::TYPE_KEEPALIVE => {}
                     other => {
                         unsupported_type += 1;
                         if config.verbose {
@@ -570,9 +597,12 @@ fn pump(
 
                 drain_reorder(
                     &mut reorder,
+                    kind.unwrap_or(Kind::Pcm),
+                    &mut decoder,
                     &mut resampler,
                     out,
                     status,
+                    &mut decoded,
                     &mut pcm,
                     &mut resampled,
                 );
@@ -585,7 +615,9 @@ fn pump(
 
         if last_report.elapsed() >= Duration::from_secs(1) {
             let secs = last_report.elapsed().as_secs_f64();
-            let idle = last_packet.map(|t| t.elapsed() > IDLE_AFTER).unwrap_or(true);
+            let idle = last_packet
+                .map(|t| t.elapsed() > IDLE_AFTER)
+                .unwrap_or(true);
 
             status
                 .pkt_per_sec
@@ -637,16 +669,113 @@ fn pump(
     Ok(())
 }
 
+/// Which audio format a stream is in.
+///
+/// Not a per-packet decision: see where it is tracked in [`pump`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// Raw signed 16-bit mono. About 770 kbps, and what every build before Opus sent.
+    Pcm,
+    /// Compressed. About 32-40 kbps for the same voice.
+    Opus,
+}
+
+impl Kind {
+    /// The format a payload type carries, or `None` for the types that are not audio.
+    pub fn of(ptype: u8) -> Option<Kind> {
+        match ptype {
+            proto::TYPE_PCM_DEBUG => Some(Kind::Pcm),
+            proto::TYPE_OPUS => Some(Kind::Opus),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Kind::Pcm => f.write_str("raw audio (uncompressed, about 770 kbps)"),
+            Kind::Opus => f.write_str("Opus (compressed)"),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn drain_reorder(
     reorder: &mut Reorder,
+    kind: Kind,
+    decoder: &mut Option<opus::Decoder>,
     resampler: &mut Resampler,
     out: &audio::Output,
     status: &Status,
+    decoded: &mut Vec<i16>,
     pcm: &mut Vec<f32>,
     resampled: &mut Vec<f32>,
 ) {
+    // The sequence the next release belongs to, needed to ask the reorder buffer for the packet
+    // *after* a lost one. `pop` has already moved the playhead past it by the time a gap is seen.
     while let Some(release) = reorder.pop() {
         match release {
+            Release::Frame(frame) if kind == Kind::Opus => {
+                let decoder = match decoder {
+                    Some(d) => d,
+                    None => match opus::Decoder::new(opus::DECODE_RATE) {
+                        Ok(d) => decoder.insert(d),
+                        Err(e) => {
+                            status.notice(format!("! {e}"));
+                            status.rejected.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                    },
+                };
+                decoded.clear();
+                if decoder.decode(&frame, decoded).is_err() {
+                    status.rejected.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                push_samples(
+                    decoded,
+                    opus::DECODE_RATE,
+                    resampler,
+                    out,
+                    status,
+                    pcm,
+                    resampled,
+                );
+            }
+            Release::Lost(seq) if kind == Kind::Opus => {
+                let Some(decoder) = decoder.as_mut() else {
+                    // Nothing has decoded yet, so there is no history to conceal from.
+                    continue;
+                };
+                let frame_samples = opus::DECODE_RATE as usize * proto::FRAME_MS as usize / 1000;
+                decoded.clear();
+                // Forward error correction first: the packet after the gap may carry a coarse copy
+                // of the frame that went missing, which beats anything invented from history. Only
+                // if it does not does the codec make one up.
+                let next = reorder.peek(seq.wrapping_add(1)).map(|p| p.to_vec());
+                let recovered = next
+                    .as_deref()
+                    .and_then(|next| decoder.decode_fec(next, frame_samples, decoded).ok())
+                    .is_some_and(|n| n > 0);
+                if recovered {
+                    status.recovered.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    decoded.clear();
+                    if decoder.conceal(frame_samples, decoded).is_err() {
+                        continue;
+                    }
+                }
+                push_samples(
+                    decoded,
+                    opus::DECODE_RATE,
+                    resampler,
+                    out,
+                    status,
+                    pcm,
+                    resampled,
+                );
+            }
             Release::Frame(frame) => {
                 let src_rate = match proto::pcm_rate_from_payload(frame.len()) {
                     Some(r) => r,
@@ -693,6 +822,42 @@ fn drain_reorder(
             }
         }
     }
+}
+
+/// Whole samples at a known rate → the sound card's ring, resampling if the rates differ.
+///
+/// The Opus path's share of what the raw-PCM path does inline. It is separate because the Opus
+/// path reaches it from three places — a decoded frame, a recovered one and a concealed one — and
+/// all three must sound alike.
+fn push_samples(
+    samples: &[i16],
+    src_rate: u32,
+    resampler: &mut Resampler,
+    out: &audio::Output,
+    status: &Status,
+    pcm: &mut Vec<f32>,
+    resampled: &mut Vec<f32>,
+) {
+    if resampler.rates().0 != src_rate {
+        status.src_rate.store(src_rate, Ordering::Relaxed);
+        status.notice(format!(
+            "   stream is {} kHz mono{}",
+            src_rate / 1000,
+            if src_rate == out.sample_rate {
+                String::new()
+            } else {
+                format!(" -> resampling to {} kHz", out.sample_rate / 1000)
+            }
+        ));
+        *resampler = Resampler::new(src_rate, out.sample_rate);
+    }
+    i16_to_f32(samples, pcm);
+    resampled.clear();
+    resampler.process(pcm, resampled);
+    let pushed = out.ring.push(resampled);
+    status
+        .ring_drops
+        .fetch_add((resampled.len() - pushed) as u64, Ordering::Relaxed);
 }
 
 #[cfg(test)]

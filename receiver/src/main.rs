@@ -268,6 +268,7 @@ fn run(config: Config) -> Result<(), String> {
                 // count that keeps climbing is clock drift being held in check.
                 let extra = [
                     (ring_drops, "ring-drops"),
+                    (status.recovered.load(Ordering::Relaxed), "recovered"),
                     (status.trimmed.load(Ordering::Relaxed), "trimmed"),
                 ]
                 .iter()
