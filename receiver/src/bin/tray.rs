@@ -33,7 +33,7 @@ USAGE:
     earshot-tray [OPTIONS]
 
 By default it puts Earshot in the microphone list and waits for the phone. Click the tray icon
-for the pairing code, to start and stop, and to turn the login item on or off.
+for this machine's address, to start and stop, and to turn the login item on or off.
 
 OPTIONS:
     -l, --listen <ADDR:PORT>   where to listen        [default: 0.0.0.0:47811]

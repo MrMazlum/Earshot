@@ -249,7 +249,7 @@ const VIRTUAL_PREFIXES: &[&str] = &[
 /// `vEthernet (Default Switch)`, `ZeroTier One [8056c2e21c000001]`. A prefix test sees none of
 /// those, which matters because a VMware or VirtualBox host-only adapter holds a perfectly ordinary
 /// `192.168.x.1/24` — private, not a `/32`, and therefore ranked *first*, ahead of the real Wi-Fi.
-/// The receiver would then lead with a pairing code for a network the phone cannot reach.
+/// The receiver would then lead with an address on a network the phone cannot reach.
 ///
 /// Kept specific enough not to swallow a real adapter: `vethernet` does not match `Ethernet`.
 const VIRTUAL_SUBSTRINGS: &[&str] = &[

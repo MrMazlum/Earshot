@@ -10,7 +10,6 @@ use earshot::audio;
 use earshot::cable;
 use earshot::engine::{self, Config, Engine};
 use earshot::help;
-use earshot::pairing::Code;
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -188,29 +187,17 @@ fn run(config: Config) -> Result<(), String> {
     println!();
     let addresses = engine::lan_addresses();
     if let Some(best) = addresses.first() {
-        // The code is the headline; the address underneath it is for the times it does not work.
-        match Code::new(best.ip, ready.port) {
-            Some(code) => {
-                println!("  PAIRING CODE      {}", code.grouped());
-                println!("  In the phone app, type those nine digits.");
-                println!("  (that is {} port {}, if you would rather type it)", best.ip, ready.port);
-            }
-            // Only an unusual address or a far-off port gets here — see pairing::Code::new.
-            None => println!(
-                "  In the phone app, type:   {}   port {}   (no pairing code for this address)",
-                best.ip, ready.port
-            ),
-        }
+        // The address, plainly. The phone finds this machine by itself in the ordinary case — it
+        // knocks on every address on its own subnet and whoever answers appears in a list — so
+        // this line is for the times that cannot work: a different subnet, a VPN, an odd port.
+        println!("  THIS PC           {}   port {}", best.ip, ready.port);
+        println!("  The phone app should find it by itself. If it does not, type that in.");
         if addresses.len() > 1 {
-            // Ethernet and Wi-Fi both up, say. Which one the phone is on is not ours to know, so
-            // offer a code for each rather than guessing.
+            // Ethernet and Wi-Fi both up, say. Which one the phone is on is not ours to know.
             println!();
-            println!("  This machine is on more than one network. If the code above does not work:");
+            println!("  This machine is on more than one network. The others:");
             for other in &addresses[1..] {
-                match Code::new(other.ip, ready.port) {
-                    Some(code) => println!("      {}   ({})", code.grouped(), other),
-                    None => println!("      {other}   (no pairing code for this address)"),
-                }
+                println!("      {other}");
             }
         }
     } else if let Some(ip) = engine::lan_ip() {

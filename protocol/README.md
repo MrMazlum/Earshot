@@ -191,31 +191,25 @@ already handled:
   `proto::seq_diff` is the correct comparison
 - **Hold late packets for a bounded window only**, then declare the gap and conceal it
 
-## Pairing codes
+## Finding the receiver
 
-Not part of the datagram: a pairing code is a friendlier way to type the receiver's **address**, and
-never travels over the wire. The PC prints nine digits, the user types them into the phone, and the
-phone turns them back into an address and a port before it sends anything.
+Not part of the datagram, and not a separate protocol: **the phone finds the PC by sending one
+`KEEPALIVE` to every address on its own subnet and listening for the `HELLO` each receiver answers
+with.** A keepalive is a valid packet carrying no audio, so a receiver answers it by existing — and
+no address has to be read off one screen and typed into another.
 
-It is a **reversible encoding, not encryption and not authentication.** The algorithm is public and
-`receiver/src/pairing.rs` documents it in full. What it buys is that a screenshot or a stream
-overlay stops showing your network layout, that neighbouring machines get unrelated-looking codes,
-and that about seven in eight mistyped digits are rejected on the spot instead of timing out.
+254 datagrams of 16 bytes, once, when the user opens the screen. The reply is matched on the
+**ssrc the phone put in the probe**, for the same reason the capture service matches replies on it:
+anything on the network can send 16 bytes, and a reply that does not carry our own session number
+is not evidence about us.
 
-`pairing-vectors.csv` is the shared truth. **Both test suites read this file**, which is what stops
-the Rust and Dart implementations drifting apart:
+Deliberately **not** multicast, mDNS or broadcast. All three are filtered, rate limited or silently
+dropped on enough home routers and phones to be unreliable, and a plain unicast knock is answered
+by code that already shipped.
 
-```
-code,address,port
-335618795,192.168.1.42,47811
-```
-
-Every address in it is made up. Touch either implementation and run both suites:
-
-```bash
-cd receiver && cargo test --locked
-cd app && flutter test
-```
+⚠️ **Discovery is not authentication.** Anything on the network can find a running receiver this
+way, and the receiver accepts audio from whoever sends it. That is the same exposure the protocol
+has always had — see the security notes in the repository README.
 
 ## Not in the protocol yet
 

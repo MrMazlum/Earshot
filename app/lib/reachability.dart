@@ -2,7 +2,7 @@
 //
 // The failure this file exists for: the phone's Wi-Fi was off, its mobile data was on, and the app
 // streamed into nothing for an entire session while looking perfectly healthy. Nothing was broken.
-// A pairing code is an *address*, and resolving one proves the digits were typed correctly and
+// Knowing where the PC is proves only that an address was found or typed, and
 // absolutely nothing else; a UDP send to an address with no route succeeds exactly like one that
 // arrives.
 //
@@ -13,7 +13,7 @@
 // Deliberately pure, and deliberately not part of any widget: it is the app's one piece of network
 // reasoning, and test/reachability_test.dart is where it is held to it.
 
-import 'pairing.dart';
+import 'discover.dart';
 
 /// How the phone is attached to the world. These strings come from NetworkWatch.kt; keep them in
 /// step with it.
@@ -70,7 +70,7 @@ enum Reach {
 /// The verdict, in the words the screen shows.
 ///
 /// The text lives here rather than in the widget because the wording *is* the feature: "you are on
-/// mobile data" is the whole answer to a session someone would otherwise spend rechecking a pairing
+/// mobile data" is the whole answer to a session someone would otherwise spend rechecking an
 /// code that was right all along.
 class Reachability {
   final Reach verdict;

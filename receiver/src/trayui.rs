@@ -9,7 +9,6 @@
 //! file, so what Windows draws in the notification area is decided by code that is tested here.
 
 use crate::engine::{Engine, LanAddress};
-use crate::pairing::Code;
 
 /// The four states a tray icon has to be able to tell apart at a glance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,26 +126,29 @@ impl View<'_> {
         )
     }
 
-    /// The pairing code for the most likely address, when there is one.
+    /// The address the phone should be told about, when there is one to give.
     ///
-    /// `None` while stopped as well as when the address cannot be encoded: with no engine the port
-    /// is not settled, and a code that names the wrong port is worse than no code.
-    pub fn pairing_code(&self) -> Option<Code> {
+    /// `None` while stopped as well as when the machine has no LAN address: with no engine the
+    /// port is not settled, and naming the wrong port is worse than naming nothing.
+    pub fn address(&self) -> Option<(std::net::Ipv4Addr, u16)> {
         if !self.running {
             return None;
         }
-        Code::new(self.lan.first()?.ip, self.snap.port)
+        Some((self.lan.first()?.ip, self.snap.port))
     }
 
-    /// What to type into the phone. The code when there is one, the address when there is not.
+    /// The one line that says where this machine is.
+    ///
+    /// The phone normally finds it without being told — it knocks on its own subnet and lists
+    /// whoever answers — so this is both a confirmation and the thing to type when knocking cannot
+    /// reach it.
     pub fn address_line(&self) -> String {
         let Some(a) = self.lan.first() else {
             return "This PC: address unknown".to_string();
         };
-        match self.pairing_code() {
-            Some(code) => format!("Pairing code: {}", code.grouped()),
-            None if !self.running => format!("This PC: {}", a.ip),
-            None => format!("This PC: {} \u{b7} port {}", a.ip, self.snap.port),
+        match self.address() {
+            Some((ip, port)) => format!("This PC: {ip} \u{b7} port {port}"),
+            None => format!("This PC: {}", a.ip),
         }
     }
 
@@ -200,12 +202,14 @@ impl View<'_> {
     /// double-clicked the icon and wants the number to type.
     pub fn summary(&self) -> String {
         let mut lines = Vec::new();
-        match self.pairing_code() {
-            Some(code) => {
-                lines.push(format!("Pairing code:   {}", code.grouped()));
+        match self.address() {
+            Some((ip, port)) => {
+                lines.push(format!("This PC:   {ip}   port {port}"));
                 lines.push(String::new());
-                lines.push("Type those nine digits into the Earshot app on your phone,".into());
-                lines.push("then press Start there.".into());
+                lines.push("The Earshot app on your phone should find it by itself:".into());
+                lines.push("it appears in the list, you tap it, then press Start.".into());
+                lines.push(String::new());
+                lines.push("If it does not appear, type that address into the app.".into());
             }
             None if !self.running => {
                 lines.push("Earshot is not running.".into());
@@ -215,17 +219,9 @@ impl View<'_> {
                 }
             }
             None => {
-                let a = self.lan.first();
-                lines.push("No pairing code covers this machine's address.".into());
+                lines.push("This machine has no LAN address Earshot recognises.".into());
                 lines.push(String::new());
-                match a {
-                    Some(a) => lines.push(format!(
-                        "In the phone app, choose \"Type an address instead\" and enter:\n    \
-                         {}   port {}",
-                        a.ip, self.snap.port
-                    )),
-                    None => lines.push("This machine has no LAN address Earshot recognises.".into()),
-                }
+                lines.push("A phone cannot find it, and there is nothing to type either.".into());
             }
         }
         if let Some(input) = self.input_line() {
@@ -409,42 +405,40 @@ mod tests {
         assert_eq!(view(true, Some("no cable"), &s, &l).state(), State::Failed);
     }
 
-    /// The code is the whole reason the tray exists — a user who misses it has nothing to type.
+    /// The address is the whole reason the tray exists — a user whose phone cannot find this
+    /// machine has nothing to fall back on if the tray will not say where it is.
     #[test]
-    fn a_running_receiver_offers_a_pairing_code_everywhere_it_can() {
+    fn a_running_receiver_says_where_it_is_everywhere_it_can() {
         let l = lan([192, 168, 1, 42]);
         let s = snap(47811);
         let v = view(true, None, &s, &l);
-        let code = v.pairing_code().expect("a private address has a code");
-        assert!(v.address_line().contains(&code.grouped()));
-        assert!(v.tooltip().contains(&code.grouped()));
-        assert!(v.summary().contains(&code.grouped()));
+        assert_eq!(v.address(), Some((Ipv4Addr::new(192, 168, 1, 42), 47811)));
+        assert!(v.address_line().contains("192.168.1.42"));
+        assert!(v.tooltip().contains("192.168.1.42"));
+        assert!(v.summary().contains("192.168.1.42"));
+        assert!(v.summary().contains("47811"));
     }
 
-    /// A stopped receiver has not bound a port yet, so any code it printed would name the wrong
-    /// one. Better to say the address and nothing more.
+    /// A stopped receiver has not bound a port yet, so any port it printed would be the wrong one.
+    /// Better to say the address and nothing more.
     #[test]
-    fn a_stopped_receiver_never_shows_a_code() {
+    fn a_stopped_receiver_never_names_a_port() {
         let l = lan([192, 168, 1, 42]);
         let s = snap(0);
         let v = view(false, None, &s, &l);
-        assert!(v.pairing_code().is_none());
+        assert!(v.address().is_none());
         assert_eq!(v.address_line(), "This PC: 192.168.1.42");
     }
 
-    /// A public address has no code. Saying so, and giving the address instead, is the difference
-    /// between a dead end and a workaround.
+    /// A machine with no LAN address cannot be found by knocking and has nothing to type either.
+    /// Saying so beats implying the phone is at fault.
     #[test]
-    fn an_address_with_no_code_falls_back_to_the_address() {
-        let l = vec![LanAddress {
-            ip: Ipv4Addr::new(93, 184, 216, 34),
-            interface: "eth0".to_string(),
-        }];
+    fn no_lan_address_is_said_out_loud() {
+        let l: Vec<LanAddress> = Vec::new();
         let s = snap(47811);
         let v = view(true, None, &s, &l);
-        assert!(v.pairing_code().is_none());
-        assert!(v.summary().contains("93.184.216.34"));
-        assert!(v.summary().contains("port 47811"));
+        assert!(v.address().is_none());
+        assert!(v.summary().contains("no LAN address"));
     }
 
     /// The Windows complaint this whole line exists for: the input is not called Earshot, and
@@ -504,7 +498,7 @@ mod tests {
     /// overruns is silently truncated by Windows rather than rejected, so the important lines have
     /// to come first.
     #[test]
-    fn the_tooltip_leads_with_the_status_and_the_code() {
+    fn the_tooltip_leads_with_the_status_and_the_address() {
         let l = lan([192, 168, 1, 42]);
         let s = Snapshot {
             connected: true,
@@ -516,7 +510,7 @@ mod tests {
         let tip = v.tooltip();
         let lines: Vec<&str> = tip.lines().collect();
         assert!(lines[0].starts_with("Earshot"));
-        assert!(tip.find("Pairing code").unwrap() < 128);
+        assert!(tip.find("This PC").unwrap() < 128);
     }
 
     #[test]

@@ -15,7 +15,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:earshot/discover.dart';
 import 'package:earshot/main.dart';
+import 'package:earshot/pc_picker.dart';
 
 /// The owner's phone: 1220x2712 at density 3.0.
 const _size = Size(406.7, 904);
@@ -93,8 +95,6 @@ void main() {
       'port': 47811,
       'source': 7,
       'rate': 48000,
-      'code': '335 618 795',
-      'manual': false,
     };
     _network = {'transport': 'wifi', 'ip': '192.168.1.9', 'prefix': 24};
 
@@ -167,6 +167,47 @@ void main() {
     await _shoot(tester, '7-muted-but-connected');
   });
 
+  /// The state the sweep produces, which a widget test has no network to produce for itself: two
+  /// machines answered and one of them is picked. It is the screen he will look at most, and
+  /// without this it would never be looked at before it shipped.
+  testWidgets('two PCs answered', (tester) async {
+    await _openWidget(
+      tester,
+      PcPicker(
+        found: const [
+          Found(Destination('192.168.1.13', 47811), Duration(milliseconds: 3)),
+          Found(Destination('192.168.1.20', 47811), Duration(milliseconds: 41)),
+        ],
+        searching: false,
+        selected: const Destination('192.168.1.13', 47811),
+        enabled: true,
+        host: TextEditingController(text: '192.168.1.13'),
+        port: TextEditingController(text: '47811'),
+        onPick: (_) {},
+        onChanged: () {},
+      ),
+    );
+    await _shoot(tester, '9-two-pcs-found');
+  });
+
+  testWidgets('still looking for a PC', (tester) async {
+    await _openWidget(
+      tester,
+      PcPicker(
+        found: const [],
+        searching: true,
+        selected: null,
+        enabled: true,
+        host: TextEditingController(),
+        port: TextEditingController(text: '47811'),
+        onPick: (_) {},
+        onChanged: () {},
+      ),
+      settle: false,
+    );
+    await _shoot(tester, '10-looking');
+  });
+
   testWidgets('a VPN is up', (tester) async {
     _network = {'transport': 'vpn', 'ip': '10.2.0.3', 'prefix': 32};
     await _open(tester);
@@ -184,6 +225,52 @@ Future<void> _open(WidgetTester tester) async {
     const RepaintBoundary(key: _rootKey, child: EarshotApp()),
   );
   await tester.pumpAndSettle();
+}
+
+/// One widget on its own, in the app's own theme — for the pieces whose interesting states need a
+/// network the test does not have.
+Future<void> _openWidget(
+  WidgetTester tester,
+  Widget child, {
+  // A spinner never stops, so a screen with one in it can only ever be pumped a fixed amount —
+  // pumpAndSettle waits for an animation that is the point of the picture.
+  bool settle = true,
+}) async {
+  tester.view
+    ..physicalSize = Size(_size.width * _dpr, 520 * _dpr)
+    ..devicePixelRatio = _dpr;
+  addTearDown(tester.view.reset);
+
+  await tester.pumpWidget(
+    RepaintBoundary(
+      key: _rootKey,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF3DDC97),
+            brightness: Brightness.dark,
+          ),
+          fontFamily: 'Roboto',
+          scaffoldBackgroundColor: const Color(0xFF0B1310),
+          inputDecorationTheme: const InputDecorationTheme(
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+        ),
+        home: Scaffold(
+          body: Padding(padding: const EdgeInsets.all(20), child: child),
+        ),
+      ),
+    ),
+  );
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump(const Duration(milliseconds: 400));
+  }
 }
 
 Future<void> _start(WidgetTester tester) =>

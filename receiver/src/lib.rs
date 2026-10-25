@@ -19,7 +19,6 @@ pub mod engine;
 pub mod help;
 /// Opus, the compressed format the phone sends. libopus, built from source and linked statically.
 pub mod opus;
-pub mod pairing;
 pub mod proto;
 pub mod reorder;
 pub mod resample;

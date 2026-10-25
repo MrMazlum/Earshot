@@ -227,8 +227,8 @@ pub fn rename_steps(current: &str) -> String {
 /// The whole Windows setup, in the order it has to happen, short enough to fit in a message box.
 pub fn quickstart(capture: &str) -> String {
     format!(
-        "1. On your phone, open the Earshot app and type the pairing code shown in\n   \
-            this menu. Then press Start.\n\
+        "1. On your phone, open the Earshot app. This PC appears in its list by\n   \
+            itself - tap it, then press Start.\n\
          \n\
          2. In Discord, Zoom, OBS or whatever you are using, open the microphone\n   \
             list and pick:\n\

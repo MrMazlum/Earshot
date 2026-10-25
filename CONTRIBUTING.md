@@ -38,10 +38,6 @@ commit: that file, a version bump, both ends updated, and the test vectors regen
 and no authentication. Bounds-check before indexing, and make sure no field an attacker controls can
 decide how long a loop runs — that one has bitten this project already, in the reorder window.
 
-`protocol/pairing-vectors.csv` works the same way. Both `receiver/src/pairing.rs` and
-`app/lib/pairing.dart` are tested against it, which is what stops the two implementations drifting
-apart — if you touch either, run both suites.
-
 ## Building and testing
 
 ```bash

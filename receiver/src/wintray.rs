@@ -109,7 +109,7 @@ struct App {
     icons: [HICON; 4],
     shown_state: Option<State>,
     shown_tip: String,
-    /// Set once the pairing code has been announced, so the balloon appears on the run that earned
+    /// Set once the address has been announced, so the balloon appears on the run that earned
     /// it and not once a second forever.
     announced: bool,
     retry_at: Option<Instant>,
@@ -207,25 +207,24 @@ impl App {
         }
     }
 
-    /// The balloon that makes the pairing code impossible to miss.
+    /// The balloon that says this machine is listening, and where.
     ///
-    /// This is the whole reason a Windows user needed a console window before: the code scrolled
-    /// past in a terminal they were told to leave open, and if they looked away they had nothing to
-    /// type. A notification sits there until dismissed.
+    /// The phone finds it by itself in the ordinary case, so this is confirmation rather than an
+    /// instruction — but it is also the only place a Windows user can read the address without
+    /// opening a terminal, which is what the console window used to be for.
     fn announce(&mut self) {
         if self.announced {
             return;
         }
-        let Some(code) = self.view().pairing_code() else {
+        let Some((ip, port)) = self.view().address() else {
             return;
         };
         self.announced = true;
         let body = match self.view().input_line() {
             Some(input) => format!(
-                "Type {} into the Earshot app on your phone.\n{input}",
-                code.grouped()
+                "Your phone should find this PC at {ip} (port {port}).\n{input}"
             ),
-            None => format!("Type {} into the Earshot app on your phone.", code.grouped()),
+            None => format!("Your phone should find this PC at {ip} (port {port})."),
         };
         self.balloon("Earshot is ready", &body);
     }
@@ -316,9 +315,9 @@ impl App {
             item(MF_STRING | MF_GRAYED, ID_DETAIL, &view.detail_line());
             sep();
 
-            // Clickable, because clicking it copies the code — the one thing a user with a phone
-            // in the other hand actually wants.
-            match view.pairing_code() {
+            // Clickable, because clicking it copies the address — the one thing a user with a
+            // phone in the other hand actually wants.
+            match view.address() {
                 Some(_) => item(MF_STRING, ID_CODE, &format!("{} (copy)", view.address_line())),
                 None => item(MF_STRING | MF_GRAYED, ID_CODE, &view.address_line()),
             }
@@ -381,13 +380,13 @@ impl App {
     }
 
     fn copy_code(&self) {
-        let Some(code) = self.view().pairing_code() else {
+        let Some((ip, _port)) = self.view().address() else {
             return;
         };
-        if copy_to_clipboard(self.hwnd, &code.to_string()) {
+        if copy_to_clipboard(self.hwnd, &ip.to_string()) {
             self.balloon(
-                "Pairing code copied",
-                &format!("{} is on the clipboard.", code.grouped()),
+                "Address copied",
+                &format!("{ip} is on the clipboard."),
             );
         }
     }

@@ -1,10 +1,11 @@
 // Earshot — Android client.
 //
-// One direction for now (phone mic → PC), raw PCM. No discovery and no Opus yet.
+// One direction for now (phone mic → PC), compressed with Opus.
 //
-// The PC is identified by a nine-digit pairing code rather than an address; pairing.dart holds the
-// encoding and receiver/src/pairing.rs is the other half of it. Typing an address still works,
-// behind "Type an address instead", because a code cannot express every address.
+// The PC is identified by its address, and in the ordinary case nobody types one: the phone knocks
+// on every door on its own subnet and lists whoever answers, because the receiver already replies
+// to any packet it understands. discover.dart has the mechanism. The address field is the fallback
+// for a PC the sweep cannot reach — another subnet, a VPN, an unusual port.
 //
 // The mic-source picker is not a settings nicety: it is the one experiment this app exists to run.
 // Only the two sources that differ by Android specification are selectable — see MicSource for why
@@ -14,10 +15,13 @@
 // navigation bar. The Start button lives in a pinned bar wrapped in SafeArea, never at the end of a
 // scrolling list — there it sat beneath the system buttons and could not be tapped.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'pairing.dart';
+import 'discover.dart';
+import 'pc_picker.dart';
 import 'reachability.dart';
 
 void main() => runApp(const EarshotApp());
@@ -120,13 +124,16 @@ class SessionPage extends StatefulWidget {
 }
 
 class _SessionPageState extends State<SessionPage> {
-  final _code = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController(text: '$defaultPort');
 
-  /// True when the user has opted out of pairing codes and is typing an address. Needed for the
-  /// addresses a code cannot express — anything outside the private blocks, or an unusual port.
-  bool _manual = false;
+  /// PCs that answered the last sweep, fastest first.
+  List<Found> _found = const [];
+
+  /// True while a sweep is in flight, so the card can say so rather than looking empty.
+  bool _searching = false;
+
+  StreamSubscription<Found>? _sweep;
 
   int _source = 7;
   int _rate = 48000;
@@ -145,7 +152,7 @@ class _SessionPageState extends State<SessionPage> {
   String? _error;
 
   /// What the phone is attached to. Comes from Android, changes under us, and is the reason a
-  /// perfectly typed pairing code can still reach nothing.
+  /// correctly chosen PC can still be unreachable.
   NetworkState _net = NetworkState.unknown;
 
   /// How long since the PC last answered, in milliseconds, or -1 if it never has this session.
@@ -170,7 +177,7 @@ class _SessionPageState extends State<SessionPage> {
 
   @override
   void dispose() {
-    _code.dispose();
+    _sweep?.cancel();
     _host.dispose();
     _port.dispose();
     super.dispose();
@@ -178,12 +185,9 @@ class _SessionPageState extends State<SessionPage> {
 
   /// Where Start would send audio right now, or null if the field is not usable yet.
   Destination? get _target {
-    if (_manual) {
-      final host = _host.text.trim();
-      if (host.isEmpty) return null;
-      return Destination(host, int.tryParse(_port.text.trim()) ?? defaultPort);
-    }
-    return resolvePairingCode(_code.text);
+    final host = _host.text.trim();
+    if (host.isEmpty) return null;
+    return Destination(host, int.tryParse(_port.text.trim()) ?? defaultPort);
   }
 
   /// What this phone can work out about reaching the PC before a packet is sent.
@@ -219,8 +223,6 @@ class _SessionPageState extends State<SessionPage> {
       if (!mounted || p == null) return;
       setState(() {
         if (net != null) _net = NetworkState.fromMap(net);
-        _code.text = (p['code'] as String?) ?? '';
-        _manual = (p['manual'] as bool?) ?? false;
         _host.text = (p['host'] as String?) ?? '';
         _port.text = '${p['port'] ?? defaultPort}';
         // A source that has since been parked would otherwise stay selected and invisible.
@@ -229,9 +231,74 @@ class _SessionPageState extends State<SessionPage> {
         _running = running;
         _muted = running && muted;
       });
+      // Nobody opened this screen to press a search button. A session that is already running is
+      // left alone: its PC is, by definition, found.
+      if (!_running) _search();
     } on PlatformException {
       // First run — defaults are fine.
     }
+  }
+
+  /// Knocks on every address on this subnet and lists whoever answers.
+  ///
+  /// Results are added as they arrive rather than at the end, so the PC across the desk appears
+  /// immediately instead of after the timeout.
+  void _search() {
+    if (_net.ip == null) {
+      // The network has not reported in yet. Ask, and come back when it has.
+      _refreshNetwork().then((_) {
+        if (mounted && _net.ip != null && !_searching) _search();
+      });
+      return;
+    }
+    _sweep?.cancel();
+    setState(() {
+      _searching = true;
+      _found = const [];
+    });
+    final port = int.tryParse(_port.text.trim()) ?? defaultPort;
+    _sweep = findReceivers(
+      selfIp: _net.ip,
+      prefix: _net.prefix,
+      port: port,
+    ).listen(
+      (found) {
+        if (!mounted) return;
+        setState(() {
+          _found = [..._found, found];
+          // One PC, nothing to choose: pick it. Two or more and the choice is the user's, unless
+          // one of them is the address already in the field.
+          if (_found.length == 1 && _host.text.trim().isEmpty) {
+            _host.text = found.destination.host;
+          }
+        });
+      },
+      onDone: () {
+        if (!mounted) return;
+        setState(() {
+          _searching = false;
+          // Nothing answered and nothing typed: offer the subnet, so what is left to type is one
+          // number rather than four.
+          if (_found.isEmpty && _host.text.trim().isEmpty) {
+            final own = _net.ip;
+            if (own != null && own.split('.').length == 4) {
+              final parts = own.split('.');
+              _host.text = '${parts[0]}.${parts[1]}.${parts[2]}.';
+            }
+          }
+        });
+      },
+      cancelOnError: false,
+    );
+  }
+
+  /// Chooses one of the PCs that answered.
+  void _pick(Destination destination) {
+    setState(() {
+      _host.text = destination.host;
+      _port.text = '${destination.port}';
+      _error = null;
+    });
   }
 
   void _onEvent(dynamic event) {
@@ -292,12 +359,10 @@ class _SessionPageState extends State<SessionPage> {
 
     final target = _target;
     if (target == null) {
-      setState(() => _error = _manual
-          ? "Type your PC's address first."
-          : looksLikePairingCode(_code.text)
-              ? 'That is not a working pairing code. Check the nine digits '
-                  'against the ones on your PC.'
-              : 'Type the nine-digit pairing code your PC is showing.');
+      setState(() => _error = _found.isEmpty
+          ? "Pick your PC, or type its address. Nothing on this network has "
+              "answered yet — check Earshot is running over there."
+          : 'Pick your PC from the list.');
       return;
     }
 
@@ -336,13 +401,7 @@ class _SessionPageState extends State<SessionPage> {
       'source': _source,
       'rate': _rate,
     };
-    // The code and the mode are remembered but never sent to the service — it only ever deals in
-    // an address and a port.
-    await _control.invokeMethod('setPrefs', {
-      ...args,
-      'code': _code.text,
-      'manual': _manual,
-    });
+    await _control.invokeMethod('setPrefs', args);
 
     try {
       await _control.invokeMethod('start', args);
@@ -356,7 +415,12 @@ class _SessionPageState extends State<SessionPage> {
     try {
       final net = await _control.invokeMapMethod<String, dynamic>('getNetwork');
       if (!mounted || net == null) return;
+      final before = _net.ip;
       setState(() => _net = NetworkState.fromMap(net));
+      // Landing on a different network means the PCs found on the last one are not reachable any
+      // more, and the ones here have never been looked for. Opening the app before the Wi-Fi has
+      // connected is the ordinary way this happens.
+      if (!_running && _net.ip != null && _net.ip != before) _search();
     } on PlatformException {
       // An older build of the app half; the verdict simply stays unknown.
     }
@@ -489,21 +553,20 @@ class _SessionPageState extends State<SessionPage> {
                     action: _running
                         ? null
                         : _CardAction(
-                            label: _manual ? 'Use a code' : 'Use an address',
-                            onTap: () => setState(() => _manual = !_manual),
+                            icon: Icons.refresh,
+                            label: _searching ? 'Looking' : 'Look again',
+                            onTap: _searching ? null : _search,
                           ),
-                    child: _manual
-                        ? _AddressFields(
-                            host: _host,
-                            port: _port,
-                            enabled: !_running,
-                            onChanged: () => setState(() {}),
-                          )
-                        : _CodeField(
-                            controller: _code,
-                            enabled: !_running,
-                            onChanged: () => setState(() {}),
-                          ),
+                    child: PcPicker(
+                      found: _found,
+                      searching: _searching,
+                      selected: _target,
+                      enabled: !_running,
+                      host: _host,
+                      port: _port,
+                      onPick: _pick,
+                      onChanged: () => setState(() {}),
+                    ),
                   ),
                   const SizedBox(height: 14),
                   _Card(
@@ -600,150 +663,6 @@ class _SessionPageState extends State<SessionPage> {
             ? () => _control.invokeMethod('openAppSettings')
             : null,
       ),
-    );
-  }
-}
-
-/// Keeps the pairing field looking like `123 456 789` while it is being typed, and refuses a tenth
-/// digit rather than accepting one and failing later.
-class _CodeFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final digits =
-        newValue.text.replaceAll(RegExp(r'\D'), '').characters.take(9).join();
-    final groups = <String>[];
-    for (var i = 0; i < digits.length; i += 3) {
-      groups.add(digits.substring(i, i + 3 > digits.length ? digits.length : i + 3));
-    }
-    final text = groups.join(' ');
-    return TextEditingValue(
-      text: text,
-      // Keep the caret at the end: this field is typed into, never edited in the middle.
-      selection: TextSelection.collapsed(offset: text.length),
-    );
-  }
-}
-
-/// The pairing code, with the address it resolves to shown underneath.
-///
-/// Echoing the address back is what stops the code feeling like a black box — the user can see
-/// that it landed somewhere plausible before pressing Start.
-class _CodeField extends StatelessWidget {
-  final TextEditingController controller;
-  final bool enabled;
-  final VoidCallback onChanged;
-  const _CodeField({
-    required this.controller,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final target = resolvePairingCode(controller.text);
-    final typed = controller.text.replaceAll(RegExp(r'\D'), '').length;
-
-    final (icon, colour, message) = switch ((typed, target)) {
-      (0, _) => (null, theme.hintColor, 'Nine digits, shown on your PC.'),
-      (_, final t?) => (
-          Icons.check_circle_outline,
-          theme.colorScheme.primary,
-          'Ready — ${t.host}${t.port == defaultPort ? '' : ':${t.port}'}',
-        ),
-      (9, _) => (
-          Icons.error_outline,
-          theme.colorScheme.error,
-          'Not a code your PC could have shown. Check the digits.',
-        ),
-      _ => (null, theme.hintColor, '${9 - typed} more to go.'),
-    };
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        TextField(
-          controller: controller,
-          enabled: enabled,
-          keyboardType: TextInputType.number,
-          autocorrect: false,
-          inputFormatters: [_CodeFormatter()],
-          onChanged: (_) => onChanged(),
-          style: const TextStyle(
-            fontSize: 26,
-            letterSpacing: 3,
-            fontWeight: FontWeight.w600,
-            fontFeatures: [FontFeature.tabularFigures()],
-          ),
-          decoration: const InputDecoration(
-            labelText: 'Pairing code',
-            hintText: '000 000 000',
-            contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 16, color: colour),
-              const SizedBox(width: 6),
-            ],
-            Expanded(
-              child: Text(message,
-                  style: theme.textTheme.bodySmall?.copyWith(color: colour)),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-/// The escape hatch: an address a pairing code cannot express.
-class _AddressFields extends StatelessWidget {
-  final TextEditingController host;
-  final TextEditingController port;
-  final bool enabled;
-  final VoidCallback onChanged;
-  const _AddressFields({
-    required this.host,
-    required this.port,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: 3,
-          child: TextField(
-            controller: host,
-            enabled: enabled,
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-            onChanged: (_) => onChanged(),
-            decoration: const InputDecoration(
-              labelText: 'Address',
-              hintText: '192.168.1.20',
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: port,
-            enabled: enabled,
-            keyboardType: TextInputType.number,
-            onChanged: (_) => onChanged(),
-            decoration: const InputDecoration(labelText: 'Port'),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -885,7 +804,7 @@ class _PcReply extends StatelessWidget {
           theme.colorScheme.error,
           'Your PC is not answering',
           'The microphone is being sent, but nothing is coming back. Check that Earshot is '
-              'running on the PC, and that this is the right pairing code. An Earshot on the PC '
+              'running on the PC, and that this is the right address. An Earshot on the PC '
               'older than this app never answers — the sound still works, but this cannot tell.',
         ),
       LinkState.idle => (Icons.circle_outlined, theme.hintColor, '', null),
@@ -1100,7 +1019,10 @@ class _LevelMeter extends StatelessWidget {
 class _CardAction {
   final String label;
   final IconData? icon;
-  final VoidCallback onTap;
+
+  /// Null while the action is unavailable — a sweep already running, say. The label still shows,
+  /// because a button that vanishes mid-tap is worse than one that waits.
+  final VoidCallback? onTap;
   const _CardAction({required this.label, this.icon, required this.onTap});
 }
 

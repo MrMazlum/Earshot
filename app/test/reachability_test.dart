@@ -1,12 +1,12 @@
 // The verdict the app reaches before it sends anything.
 //
-// The case at the top of this file is the one that happened: a phone on mobile data, a pairing
+// The case at the top of this file is the one that happened: a phone on mobile data, an address
 // code that resolved perfectly, and a whole session streamed into nothing. Everything else here
 // exists so that fixing it did not quietly turn into an app that refuses to start on networks
 // that work fine.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:earshot/pairing.dart';
+import 'package:earshot/discover.dart';
 import 'package:earshot/reachability.dart';
 
 const _pc = Destination('192.168.1.20', defaultPort);

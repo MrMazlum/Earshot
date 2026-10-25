@@ -21,16 +21,16 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 1. **Install VB-Cable.** Free, once, three minutes — but there is a right file and three ways to
    pick the wrong one: **[read this first ↓](#installing-vb-cable-exactly-which-file)**
 2. **Unzip Earshot and double-click `Earshot.exe`.** No window opens. A microphone icon appears next
-   to the clock, and a notification shows your **nine-digit pairing code**
-3. **On the phone:** install the APK, type the nine digits, press **Start**
+   to the clock, and a notification says this PC is listening
+3. **On the phone:** install the APK. **Your PC is already in the list** — tap it, press **Start**
    *(Android will warn you the developer is unknown — [that's expected ↓](#your-phone-will-warn-you))*
 4. **In Discord**, pick **`CABLE Output`** as your microphone — **not** `CABLE Input`
    *([why it isn't just called "Earshot" ↓](#why-your-microphone-is-called-cable-output))*
 
 ### 🐧 Linux
 
-1. **Extract and run `./earshot-tray`.** The pairing code is in the icon's menu
-2. **On the phone:** install the APK, type the nine digits, press **Start**
+1. **Extract and run `./earshot-tray`.** This machine's address is in the icon's menu
+2. **On the phone:** install the APK. **Your PC is already in the list** — tap it, press **Start**
 3. **In Discord**, pick **Earshot** as your microphone
 
 ---
@@ -210,37 +210,23 @@ arrow next to the clock, then drag the microphone icon out onto the taskbar so i
 to the clock. If it is not there either, run `earshot-console.bat` instead, which keeps a terminal
 open and will say what went wrong.
 
-## The pairing code
+## Finding your PC
 
-Your PC shows something like **335 618 795**. Type those nine digits into the app. One thing to type
-instead of an IP address *and* a port number — and your network layout is not sitting on screen in
-every screenshot and stream.
+**You do not type an address.** The app knocks on every address on your own Wi-Fi and lists whoever
+answers — usually in a few milliseconds — and you tap the one you want. It remembers it, so the next
+session is one press of Start.
 
-<details>
-<summary><b>What the code is, and what it is not</b></summary>
+Nothing new runs on the PC for this: the receiver has replied to packets it understands since the
+release that made the phone's badge honest, and a knock is just a packet carrying no audio.
 
-**The code is your address in a friendlier coat, not encryption.** It is a reversible encoding, the
-algorithm is in this repository, and anyone who wants the address back can have it. The receiver even
-prints the address underneath the code, for the times the code doesn't work.
+**When nothing appears**, there is an address field underneath the list, filled in as far as your
+own subnet so there is one number left to type. You need it when the PC is on a different subnet,
+behind a VPN, or listening on an unusual port — knocking only reaches your own network, which is
+also why it cannot find a PC that is not on it.
 
-That's fine. It is a private address that means nothing outside your own network, and anyone already
-on your network could list every device on it in about a second anyway.
-
-What the code actually buys you is smaller, and real:
-
-| | |
-|---|---|
-| Nothing to screenshot | your subnet doesn't end up in a stream or a support thread |
-| Neighbouring machines look unrelated | nobody guesses the code for the PC next to yours |
-| Typos are caught immediately | about 7 in 8 mistyped digits are rejected on the spot |
-
-That last one matters more than it sounds. The alternative to "that code is not right" is a
-thirty-second silent timeout — the worst error message a network app can give.
-
-Codes cover the private address ranges and eight ports from the default. Anything else — and there
-isn't much else — still works by typing the address, behind *"Type an address instead"* in the app.
-
-</details>
+⚠️ **Being found is not being trusted.** Anything on your network can discover a running receiver
+the same way, and the receiver takes audio from whoever sends it. See
+[What this does not protect you from](#what-this-does-not-protect-you-from).
 
 ## Why it feels instant
 
@@ -270,7 +256,7 @@ published here, or not claimed at all. It has not been measured, so it is not cl
   microphone should not be reachable from the internet
 - **Nothing is collected.** No analytics, no crash reports, no tracking. The code is public so you
   can check that yourself
-- **The pairing code identifies a PC; it does not authenticate one.** Anyone already on your network
+- **Finding a PC is not proving who it is.** Anyone already on your network
   can send audio to a receiver that is sitting idle. While a phone is actually streaming, packets
   from anywhere else are ignored until it stops — which makes cutting into a live feed a deliberate
   act rather than an accident, and is not the same as stopping it
@@ -289,9 +275,9 @@ report a problem privately.
 
 | | Works | Not yet |
 |---|---|---|
-| 📱 **Android app** | records, sends over Wi-Fi, pairs with a nine-digit code | no discovery — the code is typed, not found |
+| 📱 **Android app** | records, compresses, sends over Wi-Fi, finds the PC by itself | only on its own subnet — anything further has to be typed |
 | 💻 **PC receiver** | receives, survives loss and reordering, plays out or into a virtual mic | — |
-| 🖱️ **PC app** | tray icon on both platforms: pairing code, start/stop, start-at-login — no terminal | no window, no level meter |
+| 🖱️ **PC app** | tray icon on both platforms: the address, start/stop, start-at-login — no terminal | no window, no level meter |
 | 🐧 **Linux** | works, virtual microphone included (`--virtual-mic`) | — |
 | 🪟 **Windows** | works — audio arrives, VB-Cable path, tray icon | the input is VB-Audio's `CABLE Output` unless you rename it |
 | 🍎 **macOS** | nothing — never built, not in CI | not a priority. The code path exists: install BlackHole and use `--device` |
@@ -306,7 +292,7 @@ nobody can find alone.
 ## Build from source
 
 ```bash
-# terminal 1 — the PC side. Prints the pairing code to type into the app.
+# terminal 1 — the PC side. Prints the address the phone will find it at.
 cd receiver && cargo run --release --bin earshot-receiver
 
 # terminal 2 — a fake phone, so you can hear it working right now
@@ -320,7 +306,7 @@ how much is buffered and how much was lost. To watch it cope with a bad network:
 cargo run --release --bin earshot-testsend -- --loss 5 --jitter 25
 ```
 
-With a real phone: `cd app && flutter build apk --release`, install it, type the pairing code, press
+With a real phone: `cd app && flutter build apk --release`, install it, tap the PC in the list, press
 Start.
 
 <details>
@@ -338,7 +324,7 @@ in this mode — the audio goes to the virtual device instead. It stays until yo
 cargo run --release --bin earshot-tray -- --install
 ```
 
-Puts a microphone icon in the system tray and starts it at every login. Click it for the pairing
+Puts a microphone icon in the system tray and starts it at every login. Click it for this machine's
 code, whether the phone is connected, and a start/stop switch. The icon changes when audio is
 arriving. `--uninstall` removes the login item.
 
@@ -369,7 +355,7 @@ doesn't recognise by name.
 |---|---|
 | `app/` | the Android app — Flutter UI, Kotlin capture service |
 | `receiver/` | the PC program, in Rust |
-| `protocol/` | [the wire format, specified](protocol/README.md), and the pairing-code test vectors |
+| `protocol/` | [the wire format, specified](protocol/README.md) |
 | `tools/` | development helpers |
 | `docs/` | the security review this repo cleared before it was published |
 

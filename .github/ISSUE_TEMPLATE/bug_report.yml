@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for taking the time.
 
-        **Please do not paste your IP addresses, your pairing code, your Wi-Fi name, or a packet
+        **Please do not paste your IP addresses, your Wi-Fi name, or a packet
         capture of your own network.** None of it helps, and all of it is yours. Say
         "192.168.x.y" or "my laptop's address" instead — that is enough detail for every bug
         anyone has hit so far.

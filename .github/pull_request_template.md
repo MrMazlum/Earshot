@@ -12,7 +12,7 @@ None.
 ## Checks
 
 - [ ] `cd receiver && cargo test --locked && cargo clippy --locked --all-targets -- -D warnings`
-- [ ] `cd app && flutter test && flutter analyze` (if the app or the pairing code changed)
+- [ ] `cd app && flutter test && flutter analyze` (if the app changed)
 - [ ] Nothing new is printed to a terminal in anything but plain ASCII
 - [ ] No IP address, MAC address, SSID, device serial, keystore or token anywhere in the diff
 - [ ] The wire format is unchanged — or `protocol/README.md`, both implementations and the test

@@ -32,14 +32,14 @@ pub fn nothing_arriving_hint(port: u16, windows: bool) -> String {
         ]);
     } else {
         lines.extend([
-            "    Check the phone and this PC are on the same Wi-Fi, and that the code or".into(),
-            "    address in the app matches the one above. If a firewall is running:".into(),
+            "    Check the phone and this PC are on the same Wi-Fi, and that the PC the".into(),
+            "    app is pointed at is the address above. If a firewall is running:".into(),
             String::new(),
             ufw_rule(port),
             String::new(),
             "    That opens the port to your own network only. If your addresses start".into(),
             "    10. or 172.16-172.31 rather than 192.168, put that range in instead".into(),
-            "    (10.0.0.0/8 or 172.16.0.0/12) - the code above shows which you are on.".into(),
+            "    (10.0.0.0/8 or 172.16.0.0/12) - the address above shows which you are on.".into(),
         ]);
     }
     lines.extend([
@@ -99,8 +99,8 @@ pub fn troubleshooting(port: u16, windows: bool) -> String {
         );
     } else {
         out.push_str(
-            "Check the phone and this PC are on the same Wi-Fi, and that the code in\n\
-             the app matches the one in this menu. If a firewall is running:\n\n",
+            "Check the phone and this PC are on the same Wi-Fi, and that the PC the app\n\
+             is pointed at is the address in this menu. If a firewall is running:\n\n",
         );
         out.push_str(ufw_rule(port).trim_start());
         out.push_str(
@@ -116,8 +116,8 @@ pub fn troubleshooting(port: u16, windows: bool) -> String {
          - Guest Wi-Fi and \"client isolation\" block device-to-device traffic\n    \
            outright, and no firewall rule will help. Turning on the phone's\n    \
            hotspot and joining this PC to it rules that out in a minute.\n  \
-         - A PC on both Ethernet and Wi-Fi gets a code for each. Use the one for\n    \
-           the network the phone is on.",
+         - A PC on both Ethernet and Wi-Fi has an address on each, and the phone\n    \
+           only finds the one on its own network. Use that one.",
     );
     out
 }
