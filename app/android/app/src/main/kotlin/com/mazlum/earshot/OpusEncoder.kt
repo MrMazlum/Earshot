@@ -75,15 +75,9 @@ class OpusEncoder private constructor(private var handle: Long, val rate: Int) {
 
         /** True once the native library has loaded. False means every session sends raw audio. */
         val available: Boolean by lazy {
-            try {
-                System.loadLibrary("earshot_opus")
-                Log.i(TAG, "libopus ${nativeVersion()}")
-                true
-            } catch (e: UnsatisfiedLinkError) {
-                // Not an error worth showing anyone: the stream still works, uncompressed.
-                Log.w(TAG, "no Opus on this build, sending raw audio instead: ${e.message}")
-                false
-            }
+            if (!NativeAudio.available) return@lazy false
+            Log.i(TAG, "libopus ${nativeVersion()}")
+            true
         }
 
         /**

@@ -101,6 +101,10 @@ class MainActivity : FlutterActivity() {
                                 putExtra(MicService.EXTRA_PORT, call.argument<Int>("port") ?: 47811)
                                 putExtra(MicService.EXTRA_SOURCE, call.argument<Int>("source") ?: 7)
                                 putExtra(MicService.EXTRA_RATE, call.argument<Int>("rate") ?: 48000)
+                                putExtra(
+                                    MicService.EXTRA_DENOISE,
+                                    call.argument<Boolean>("denoise") ?: false,
+                                )
                             }
                             ContextCompat.startForegroundService(this, intent)
                             result.success(true)
@@ -120,10 +124,7 @@ class MainActivity : FlutterActivity() {
                                 "port" to p.getInt("port", 47811),
                                 "source" to p.getInt("source", 7),
                                 "rate" to p.getInt("rate", 48000),
-                                // The pairing code is kept as typed so the field comes back the way
-                                // the user left it; host and port above are what it resolved to.
-                                "code" to p.getString("code", ""),
-                                "manual" to p.getBoolean("manual", false),
+                                "denoise" to p.getBoolean("denoise", false),
                             )
                         )
                     }
@@ -134,8 +135,7 @@ class MainActivity : FlutterActivity() {
                             call.argument<Int>("port")?.let { putInt("port", it) }
                             call.argument<Int>("source")?.let { putInt("source", it) }
                             call.argument<Int>("rate")?.let { putInt("rate", it) }
-                            call.argument<String>("code")?.let { putString("code", it) }
-                            call.argument<Boolean>("manual")?.let { putBoolean("manual", it) }
+                            call.argument<Boolean>("denoise")?.let { putBoolean("denoise", it) }
                         }.apply()
                         result.success(true)
                     }

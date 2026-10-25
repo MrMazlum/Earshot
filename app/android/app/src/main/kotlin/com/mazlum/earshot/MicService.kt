@@ -41,6 +41,7 @@ class MicService : Service() {
         const val EXTRA_PORT = "port"
         const val EXTRA_SOURCE = "source"
         const val EXTRA_RATE = "rate"
+        const val EXTRA_DENOISE = "denoise"
         const val EXTRA_MUTED = "muted"
 
         private const val CHANNEL_ID = "earshot_session"
@@ -107,13 +108,14 @@ class MicService : Service() {
                 val port = intent.getIntExtra(EXTRA_PORT, 47811)
                 val source = intent.getIntExtra(EXTRA_SOURCE, 7) // VOICE_COMMUNICATION
                 val rate = intent.getIntExtra(EXTRA_RATE, Protocol.SAMPLE_RATE)
+                val denoise = intent.getBooleanExtra(EXTRA_DENOISE, false)
                 streamHost = host
                 streamPort = port
                 // Every session starts live. A mute carried over from last time would be a silent
                 // microphone that nobody asked for.
                 muted = false
                 startForegroundCompat()
-                startStreaming(host, port, source, rate)
+                startStreaming(host, port, source, rate, denoise)
             }
         }
         return START_STICKY
@@ -213,7 +215,13 @@ class MicService : Service() {
 
     // ── The stream ───────────────────────────────────────────────────────────
 
-    private fun startStreaming(host: String, port: Int, source: Int, requestedRate: Int) {
+    private fun startStreaming(
+        host: String,
+        port: Int,
+        source: Int,
+        requestedRate: Int,
+        denoise: Boolean,
+    ) {
         if (running) return
         running = true
         acquireWifiLock()
@@ -222,6 +230,7 @@ class MicService : Service() {
             var record: AudioRecord? = null
             var socket: DatagramSocket? = null
             var encoder: OpusEncoder? = null
+            var denoiser: Denoiser? = null
             try {
                 // Try the requested rate, then 16 kHz. Some devices only give the noise-cancelled
                 // voice chain at 16 kHz — that is exactly what P0.1 is measuring.
@@ -250,9 +259,19 @@ class MicService : Service() {
                 // stream goes out as raw audio exactly as it always did -- see OpusEncoder.
                 encoder = OpusEncoder.create(rate)
                 val opus = encoder
+
+                // Noise suppression, when it was asked for and this rate allows it. RNNoise is
+                // 48 kHz only, so the voice-call source at 16 kHz simply does not get it -- that
+                // source is already running the phone's own suppressor, which is the trade it
+                // makes for the sample rate.
+                denoiser = if (denoise) Denoiser.create(rate, frameSamples) else null
+                val clean = denoiser
+                // Whole samples for the denoiser to work on. Shared with the Opus path below:
+                // both want the same frame as numbers rather than bytes, and the loop must not
+                // allocate.
+                val working = if (clean != null || opus != null) ShortArray(frameSamples) else ShortArray(0)
                 // Allocated here because the loop below must not allocate: the samples as whole
                 // numbers, and a packet with room for the largest Opus frame after its header.
-                val shorts = if (opus != null) ShortArray(frameSamples) else ShortArray(0)
                 val opusPacket = if (opus != null) {
                     ByteArray(Protocol.HEADER_LEN + OpusEncoder.MAX_PACKET_BYTES)
                 } else {
@@ -355,24 +374,44 @@ class MicService : Service() {
                         continue
                     }
 
+                    // The frame was read as bytes, because that is what the raw path wants. Both
+                    // the denoiser and Opus want whole samples, so unpack once if either is on.
+                    if (working.isNotEmpty()) {
+                        var si = 0
+                        var bi = Protocol.HEADER_LEN
+                        while (si < frameSamples) {
+                            working[si] =
+                                ((packet[bi].toInt() and 0xFF) or (packet[bi + 1].toInt() shl 8))
+                                    .toShort()
+                            si++
+                            bi += 2
+                        }
+                    }
+
+                    // Clean first, compress second: compressing noise and then removing it would
+                    // mean spending bits on the noise and then throwing them away, and the codec
+                    // would already have decided how to spend them.
+                    if (clean != null && clean.process(working, frameSamples)) {
+                        // The raw path and the meter read the bytes, so put the cleaned samples
+                        // back where they came from.
+                        var si = 0
+                        var bi = Protocol.HEADER_LEN
+                        while (si < frameSamples) {
+                            val v = working[si].toInt()
+                            packet[bi] = (v and 0xFF).toByte()
+                            packet[bi + 1] = ((v shr 8) and 0xFF).toByte()
+                            si++
+                            bi += 2
+                        }
+                    }
+
                     // One frame out, compressed if this session can compress. The two paths
                     // differ only in what the payload is and how long it is; everything the
                     // receiver counts by -- sequence, timestamp, ssrc -- is identical, which is
                     // why a stream can be either without the receiver needing to be told twice.
                     var length = 0
                     if (opus != null) {
-                        // The frame was read as bytes, because that is what the meter below and
-                        // the raw path both want. Opus wants whole samples.
-                        var si = 0
-                        var bi = Protocol.HEADER_LEN
-                        while (si < frameSamples) {
-                            shorts[si] =
-                                ((packet[bi].toInt() and 0xFF) or (packet[bi + 1].toInt() shl 8))
-                                    .toShort()
-                            si++
-                            bi += 2
-                        }
-                        val written = opus.encode(shorts, frameSamples, opusPacket, Protocol.HEADER_LEN)
+                        val written = opus.encode(working, frameSamples, opusPacket, Protocol.HEADER_LEN)
                         if (written > 0) {
                             Protocol.writeHeader(
                                 opusPacket,
@@ -437,6 +476,8 @@ class MicService : Service() {
                 socket?.close()
                 encoder?.close()
                 encoder = null
+                denoiser?.close()
+                denoiser = null
                 Bus.emitStopped()
             }
         }

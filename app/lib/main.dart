@@ -138,6 +138,10 @@ class _SessionPageState extends State<SessionPage> {
   int _source = 7;
   int _rate = 48000;
 
+  /// Noise suppression, which only exists at 48 kHz — see [Denoiser] on the Android side. It is a
+  /// request like the rate is: a phone whose build has no native library simply streams without it.
+  bool _denoise = false;
+
   bool _running = false;
 
   /// The mic gate. Owned by the service, not by this screen — it can also be flipped from the
@@ -228,6 +232,7 @@ class _SessionPageState extends State<SessionPage> {
         // A source that has since been parked would otherwise stay selected and invisible.
         _source = MicSource.usable((p['source'] as int?) ?? 7);
         _rate = (p['rate'] as int?) ?? 48000;
+        _denoise = (p['denoise'] as bool?) ?? false;
         _running = running;
         _muted = running && muted;
       });
@@ -402,6 +407,7 @@ class _SessionPageState extends State<SessionPage> {
       'port': target.port,
       'source': _source,
       'rate': _rate,
+      'denoise': _denoise,
     };
     await _control.invokeMethod('setPrefs', args);
 
@@ -610,6 +616,38 @@ class _SessionPageState extends State<SessionPage> {
                           MicSource.byId(_source).blurb,
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: theme.hintColor),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          child: Divider(height: 1),
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Clean up noise',
+                                      style: theme.textTheme.bodyMedium),
+                                  Text(
+                                    _rate == 48000
+                                        ? 'Takes out fans, hum and traffic. Keeps the full band.'
+                                        : 'Only at 48 kHz.',
+                                    style: theme.textTheme.bodySmall
+                                        ?.copyWith(color: theme.hintColor),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: _denoise && _rate == 48000,
+                              // Off and unreachable at 16 kHz rather than quietly ignored: the
+                              // library is 48 kHz only, and a switch that does nothing is a lie.
+                              onChanged: _running || _rate != 48000
+                                  ? null
+                                  : (v) => setState(() => _denoise = v),
+                            ),
+                          ],
                         ),
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 14),
