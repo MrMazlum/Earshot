@@ -244,10 +244,10 @@ class _SessionPageState extends State<SessionPage> {
   /// Results are added as they arrive rather than at the end, so the PC across the desk appears
   /// immediately instead of after the timeout.
   void _search() {
-    if (_net.ip == null) {
+    if (_net.localIp == null) {
       // The network has not reported in yet. Ask, and come back when it has.
       _refreshNetwork().then((_) {
-        if (mounted && _net.ip != null && !_searching) _search();
+        if (mounted && _net.localIp != null && !_searching) _search();
       });
       return;
     }
@@ -258,8 +258,10 @@ class _SessionPageState extends State<SessionPage> {
     });
     final port = int.tryParse(_port.text.trim()) ?? defaultPort;
     _sweep = findReceivers(
-      selfIp: _net.ip,
-      prefix: _net.prefix,
+      // The local network, not the active one: with a VPN up those differ, and the PC is only
+      // ever on the local one.
+      selfIp: _net.localIp,
+      prefix: _net.localPrefix,
       port: port,
     ).listen(
       (found) {
@@ -280,7 +282,7 @@ class _SessionPageState extends State<SessionPage> {
           // Nothing answered and nothing typed: offer the subnet, so what is left to type is one
           // number rather than four.
           if (_found.isEmpty && _host.text.trim().isEmpty) {
-            final own = _net.ip;
+            final own = _net.localIp;
             if (own != null && own.split('.').length == 4) {
               final parts = own.split('.');
               _host.text = '${parts[0]}.${parts[1]}.${parts[2]}.';
@@ -415,12 +417,12 @@ class _SessionPageState extends State<SessionPage> {
     try {
       final net = await _control.invokeMapMethod<String, dynamic>('getNetwork');
       if (!mounted || net == null) return;
-      final before = _net.ip;
+      final before = _net.localIp;
       setState(() => _net = NetworkState.fromMap(net));
       // Landing on a different network means the PCs found on the last one are not reachable any
       // more, and the ones here have never been looked for. Opening the app before the Wi-Fi has
       // connected is the ordinary way this happens.
-      if (!_running && _net.ip != null && _net.ip != before) _search();
+      if (!_running && _net.localIp != null && _net.localIp != before) _search();
     } on PlatformException {
       // An older build of the app half; the verdict simply stays unknown.
     }

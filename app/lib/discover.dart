@@ -99,9 +99,13 @@ List<String> sweepTargets(String? ip, int prefix) {
   if (parts.length != 4) return const [];
   final octets = parts.map(int.tryParse).toList();
   if (octets.any((o) => o == null || o < 0 || o > 255)) return const [];
-  // A /24 is 254 hosts, which is the most worth knocking on. Narrower subnets (/25 and up) are
+  // A /24 is 254 hosts, which is the most worth knocking on. Narrower subnets (/25 to /30) are
   // swept as the /24 they sit inside: a few wasted datagrams, and no arithmetic to get wrong.
-  if (prefix < 24) return const [];
+  //
+  // A /31 or /32 is a point-to-point link with no neighbours — a VPN tunnel is the usual one. The
+  // addresses around it belong to other people's links, so knocking on them would be both useless
+  // and rude.
+  if (prefix < 24 || prefix > 30) return const [];
 
   final self = octets[3]!;
   final base = '${octets[0]}.${octets[1]}.${octets[2]}';

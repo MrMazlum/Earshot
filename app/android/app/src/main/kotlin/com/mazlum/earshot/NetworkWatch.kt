@@ -38,7 +38,7 @@ object NetworkWatch {
 
     /** The last snapshot, so a UI attaching late does not have to wait for a change. */
     @Volatile
-    private var latest: Map<String, Any?> = mapOf("transport" to NONE, "ip" to null, "prefix" to 0)
+    private var latest: Map<String, Any?> = mapOf("transport" to NONE, "ip" to null, "prefix" to 0, "localIp" to null, "localPrefix" to 0)
 
     fun snapshot(): Map<String, Any?> = latest
 
@@ -97,11 +97,11 @@ object NetworkWatch {
     }
 
     private fun read(): Map<String, Any?> {
-        val cm = manager ?: return mapOf("transport" to NONE, "ip" to null, "prefix" to 0)
+        val cm = manager ?: return mapOf("transport" to NONE, "ip" to null, "prefix" to 0, "localIp" to null, "localPrefix" to 0)
         val network = cm.activeNetwork
         val caps = network?.let { cm.getNetworkCapabilities(it) }
         if (network == null || caps == null) {
-            return mapOf("transport" to NONE, "ip" to null, "prefix" to 0)
+            return mapOf("transport" to NONE, "ip" to null, "prefix" to 0, "localIp" to null, "localPrefix" to 0)
         }
 
         // VPN first, and deliberately: when a tunnel is up it *is* the default network, and saying
@@ -116,19 +116,54 @@ object NetworkWatch {
 
         // The IPv4 address on that network, with its prefix length: together they are the phone's
         // subnet, which is what says whether the PC is somewhere it could possibly be reached.
-        var ip: String? = null
-        var prefix = 0
-        val link = cm.getLinkProperties(network)
-        if (link != null) {
-            for (address in link.linkAddresses) {
-                val inet = address.address
-                if (inet is Inet4Address && !inet.isLoopbackAddress && !inet.isLinkLocalAddress) {
-                    ip = inet.hostAddress
-                    prefix = address.prefixLength
-                    break
+        val (ip, prefix) = ipv4Of(cm, network)
+
+        // The local network underneath, when the active one is a tunnel.
+        //
+        // With Tailscale (or any VPN) up, the *active* network is the tunnel and its address is a
+        // 100.64-100.127 one, which is a private range of its own and says nothing about this
+        // Wi-Fi. Reporting only that was a real fault: the app would go looking for the PC around
+        // the tailnet, find nothing every time, and look exactly like a PC that was switched off.
+        //
+        // So the tunnel stays the answer to "where are your packets going" — that warning is
+        // right and is why VPN is checked first — and this is the answer to "which network could
+        // your PC be on".
+        var localIp = ip
+        var localPrefix = prefix
+        if (transport == VPN) {
+            val underneath = cm.allNetworks.firstOrNull { candidate ->
+                val c = cm.getNetworkCapabilities(candidate) ?: return@firstOrNull false
+                !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                        c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+            }
+            if (underneath != null) {
+                val (wifiIp, wifiPrefix) = ipv4Of(cm, underneath)
+                if (wifiIp != null) {
+                    localIp = wifiIp
+                    localPrefix = wifiPrefix
                 }
             }
         }
-        return mapOf("transport" to transport, "ip" to ip, "prefix" to prefix)
+
+        return mapOf(
+            "transport" to transport,
+            "ip" to ip,
+            "prefix" to prefix,
+            "localIp" to localIp,
+            "localPrefix" to localPrefix,
+        )
+    }
+
+    /** The first usable IPv4 address on one network, with its prefix length. */
+    private fun ipv4Of(cm: ConnectivityManager, network: Network): Pair<String?, Int> {
+        val link = cm.getLinkProperties(network) ?: return null to 0
+        for (address in link.linkAddresses) {
+            val inet = address.address
+            if (inet is Inet4Address && !inet.isLoopbackAddress && !inet.isLinkLocalAddress) {
+                return inet.hostAddress to address.prefixLength
+            }
+        }
+        return null to 0
     }
 }

@@ -27,29 +27,52 @@ class NetworkState {
   /// The subnet prefix that came with [ip] — 24 for a typical home Wi-Fi.
   final int prefix;
 
+  /// The address on the *local* network, which is the same as [ip] unless a VPN is up.
+  ///
+  /// With Tailscale or any other tunnel running, the active network is the tunnel and [ip] is its
+  /// address — a 100.64-100.127 one, a private range of its own that says nothing about this
+  /// Wi-Fi. The PC can only be found on the network underneath, so that is the address the search
+  /// uses. [ip] stays the tunnel's, because the warning about it is right.
+  final String? localIp;
+
+  /// The prefix that came with [localIp].
+  final int localPrefix;
+
   const NetworkState({
     required this.transport,
     this.ip,
     this.prefix = 0,
+    this.localIp,
+    this.localPrefix = 0,
   });
 
   static const unknown = NetworkState(transport: 'unknown');
 
-  factory NetworkState.fromMap(Map<dynamic, dynamic> map) => NetworkState(
-        transport: (map['transport'] as String?) ?? 'unknown',
-        ip: map['ip'] as String?,
-        prefix: (map['prefix'] as num?)?.toInt() ?? 0,
-      );
+  factory NetworkState.fromMap(Map<dynamic, dynamic> map) {
+    final ip = map['ip'] as String?;
+    final prefix = (map['prefix'] as num?)?.toInt() ?? 0;
+    return NetworkState(
+      transport: (map['transport'] as String?) ?? 'unknown',
+      ip: ip,
+      prefix: prefix,
+      // An older build of the app half sends neither; falling back to the active network is what
+      // it used to do, and is right whenever no VPN is up.
+      localIp: (map['localIp'] as String?) ?? ip,
+      localPrefix: (map['localPrefix'] as num?)?.toInt() ?? prefix,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
       other is NetworkState &&
       other.transport == transport &&
       other.ip == ip &&
-      other.prefix == prefix;
+      other.prefix == prefix &&
+      other.localIp == localIp &&
+      other.localPrefix == localPrefix;
 
   @override
-  int get hashCode => Object.hash(transport, ip, prefix);
+  int get hashCode => Object.hash(transport, ip, prefix, localIp, localPrefix);
 }
 
 /// How bad the news is.
@@ -195,6 +218,18 @@ Reachability reachability(NetworkState net, Destination? target) {
       );
 
     case 'vpn':
+      // A tunnel is the active network, but most of them — Tailscale among them — only carry
+      // their own addresses and leave local traffic alone. So the question is not "is a VPN on",
+      // it is "is the PC still on the Wi-Fi underneath".
+      if (private && sameSubnet(net.localIp, net.localPrefix, host)) {
+        return Reachability(
+          Reach.warn,
+          'A VPN is on, but your PC is on this Wi-Fi',
+          detail: 'This phone is ${net.localIp} on the Wi-Fi, and $host is on the same network. '
+              'Most VPNs leave local traffic alone, so this usually works. If nothing arrives, '
+              'turn the VPN off and try again.',
+        );
+      }
       return const Reachability(
         Reach.warn,
         'A VPN is on',
