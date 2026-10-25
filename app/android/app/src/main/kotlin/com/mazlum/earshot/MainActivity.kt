@@ -122,9 +122,10 @@ class MainActivity : FlutterActivity() {
                             mapOf(
                                 "host" to p.getString("host", ""),
                                 "port" to p.getInt("port", 47811),
-                                "source" to p.getInt("source", 7),
                                 "rate" to p.getInt("rate", 48000),
-                                "denoise" to p.getBoolean("denoise", false),
+                                // Which of the three choices was picked. Negative means Earshot
+                                // cleans the signal itself -- see MicSource on the Dart side.
+                                "source" to p.getInt("key", p.getInt("source", 7)),
                             )
                         )
                     }
@@ -135,7 +136,7 @@ class MainActivity : FlutterActivity() {
                             call.argument<Int>("port")?.let { putInt("port", it) }
                             call.argument<Int>("source")?.let { putInt("source", it) }
                             call.argument<Int>("rate")?.let { putInt("rate", it) }
-                            call.argument<Boolean>("denoise")?.let { putBoolean("denoise", it) }
+                            call.argument<Int>("key")?.let { putInt("key", it) }
                         }.apply()
                         result.success(true)
                     }

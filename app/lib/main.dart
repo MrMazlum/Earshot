@@ -57,33 +57,53 @@ const _backdrop = Color(0xFF0B1310);
 /// recording is worse than offering two that are definitely not. They come back when there is a
 /// measurement on a real phone to justify them.
 class MicSource {
+  /// Android's `MediaRecorder.AudioSource` value this choice captures with.
   final int id;
+
+  /// True when Earshot cleans the signal itself, with RNNoise, after capturing it.
+  final bool denoise;
+
   final String name;
   final String blurb;
 
-  /// False for the ones parked until they can be told apart on a real phone.
-  final bool available;
+  const MicSource(this.id, this.name, this.blurb, {this.denoise = false});
 
-  const MicSource(this.id, this.name, this.blurb, {this.available = true});
-
+  /// Three choices, and they are three because they sound different — not because Android has
+  /// three microphones.
+  ///
+  /// The first two are Android's, and differ by its own specification: the voice-call chain runs
+  /// the phone's echo and noise cancellation, the plain microphone does not. The third is ours:
+  /// the plain microphone, cleaned by RNNoise after capture, which is the only way to have both
+  /// the full band and a quiet room.
+  ///
+  /// The other `AudioSource` values — speech, unprocessed, camcorder — are deliberately absent.
+  /// Most phones wire them straight back to the plain microphone, so offering five choices that
+  /// produce three recordings is worse than offering three that produce three. They come back if
+  /// a measurement on a real phone ever justifies them.
   static const all = <MicSource>[
     MicSource(7, 'Voice call',
-        'Echo and noise cancellation, like a phone call. May force 16 kHz.'),
-    MicSource(1, 'Plain mic', 'Barely processed. Room and fan noise come through.'),
-    MicSource(6, 'Speech', 'Often the plain mic under another name.',
-        available: false),
-    MicSource(9, 'Unprocessed', 'No processing, where the phone supports it.',
-        available: false),
-    MicSource(5, 'Camcorder', 'The video mic array. Often the plain mic.',
-        available: false),
+        'The phone call chain: its own echo and noise cancellation. May force 16 kHz.'),
+    MicSource(1, 'Plain mic',
+        'Barely processed, full band. Room and fan noise come through.'),
+    MicSource(1, 'Noise cancelling',
+        'The plain mic, cleaned here instead of by the phone. Full band and quiet. 48 kHz only.',
+        denoise: true),
   ];
 
-  static MicSource byId(int id) =>
-      all.firstWhere((s) => s.id == id, orElse: () => all.first);
+  /// How a choice is stored and restored: the Android source alone is not enough to tell the plain
+  /// microphone from the cleaned one, because they capture identically.
+  int get key => denoise ? -id : id;
 
-  /// Falls back to the default when a stored choice is no longer selectable.
-  static int usable(int id) =>
-      all.any((s) => s.id == id && s.available) ? id : all.first.id;
+  static MicSource byKey(int key) =>
+      all.firstWhere((s) => s.key == key, orElse: () => all.first);
+
+  /// Falls back to the default when a stored choice no longer exists, or cannot run at this rate —
+  /// the cleaned option is 48 kHz only, and silently leaving it selected at 16 would be a lie.
+  static MicSource usable(int key, int rate) {
+    final chosen = byKey(key);
+    if (chosen.denoise && rate != 48000) return all[1];
+    return chosen;
+  }
 }
 
 class EarshotApp extends StatelessWidget {
@@ -135,12 +155,9 @@ class _SessionPageState extends State<SessionPage> {
 
   StreamSubscription<Found>? _sweep;
 
+  /// The chosen microphone, as [MicSource.key] — negative when Earshot does the cleaning.
   int _source = 7;
   int _rate = 48000;
-
-  /// Noise suppression, which only exists at 48 kHz — see [Denoiser] on the Android side. It is a
-  /// request like the rate is: a phone whose build has no native library simply streams without it.
-  bool _denoise = false;
 
   bool _running = false;
 
@@ -230,9 +247,8 @@ class _SessionPageState extends State<SessionPage> {
         _host.text = (p['host'] as String?) ?? '';
         _port.text = '${p['port'] ?? defaultPort}';
         // A source that has since been parked would otherwise stay selected and invisible.
-        _source = MicSource.usable((p['source'] as int?) ?? 7);
         _rate = (p['rate'] as int?) ?? 48000;
-        _denoise = (p['denoise'] as bool?) ?? false;
+        _source = MicSource.usable((p['source'] as int?) ?? 7, _rate).key;
         _running = running;
         _muted = running && muted;
       });
@@ -402,12 +418,16 @@ class _SessionPageState extends State<SessionPage> {
     }
     if (_permissionBlocked) setState(() => _permissionBlocked = false);
 
+    final chosen = MicSource.usable(_source, _rate);
     final args = {
       'host': target.host,
       'port': target.port,
-      'source': _source,
+      // The service only ever deals in an Android source and a flag; the key is this screen's
+      // business, and is what gets remembered.
+      'source': chosen.id,
       'rate': _rate,
-      'denoise': _denoise,
+      'denoise': chosen.denoise,
+      'key': chosen.key,
     };
     await _control.invokeMethod('setPrefs', args);
 
@@ -474,11 +494,9 @@ class _SessionPageState extends State<SessionPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(
-                          s.available ? Icons.check_circle_outline : Icons.lock_outline,
+                          Icons.check_circle_outline,
                           size: 17,
-                          color: s.available
-                              ? theme.colorScheme.primary
-                              : theme.hintColor,
+                          color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -595,59 +613,22 @@ class _SessionPageState extends State<SessionPage> {
                           children: MicSource.all
                               .map((s) => ChoiceChip(
                                     label: Text(s.name),
-                                    avatar: s.available
-                                        ? null
-                                        : const Icon(Icons.lock_outline,
-                                            size: 15),
-                                    selected: s.available && _source == s.id,
-                                    // A locked chip stays visible and tappable so its blurb can
-                                    // explain itself; it just cannot be chosen.
-                                    onSelected: _running
-                                        ? null
-                                        : (_) => setState(() {
-                                              if (s.available) _source = s.id;
-                                            }),
-                                    showCheckmark: s.available,
+                                    selected: _source == s.key,
+                                    // Cleaning is 48 kHz only, so at 16 the chip is there and
+                                    // visibly unavailable rather than quietly doing nothing.
+                                    onSelected:
+                                        _running || (s.denoise && _rate != 48000)
+                                            ? null
+                                            : (_) =>
+                                                setState(() => _source = s.key),
                                   ))
                               .toList(),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          MicSource.byId(_source).blurb,
+                          MicSource.byKey(_source).blurb,
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: theme.hintColor),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 14),
-                          child: Divider(height: 1),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Clean up noise',
-                                      style: theme.textTheme.bodyMedium),
-                                  Text(
-                                    _rate == 48000
-                                        ? 'Takes out fans, hum and traffic. Keeps the full band.'
-                                        : 'Only at 48 kHz.',
-                                    style: theme.textTheme.bodySmall
-                                        ?.copyWith(color: theme.hintColor),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Switch(
-                              value: _denoise && _rate == 48000,
-                              // Off and unreachable at 16 kHz rather than quietly ignored: the
-                              // library is 48 kHz only, and a switch that does nothing is a lie.
-                              onChanged: _running || _rate != 48000
-                                  ? null
-                                  : (v) => setState(() => _denoise = v),
-                            ),
-                          ],
                         ),
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 14),
