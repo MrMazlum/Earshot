@@ -15,9 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:earshot/discover.dart';
 import 'package:earshot/main.dart';
-import 'package:earshot/pc_picker.dart';
 
 /// The owner's phone: 1220x2712 at density 3.0.
 const _size = Size(406.7, 904);
@@ -54,6 +52,22 @@ Future<void> _loadFonts() async {
     }
     await loader.load();
   }
+
+  // The panel design rests on its monospace: without it every number falls out of its column and
+  // the picture is of a screen the phone will never show.
+  final monoLoader = FontLoader('JetBrainsMono');
+  for (final name in [
+    'JetBrainsMonoNL-Regular.ttf',
+    'JetBrainsMonoNL-Medium.ttf',
+    'JetBrainsMonoNL-Bold.ttf',
+  ]) {
+    final file = File('assets/fonts/$name');
+    if (!file.existsSync()) {
+      throw StateError('gen_screens: ${file.path} is missing.');
+    }
+    monoLoader.addFont(Future.value(file.readAsBytesSync().buffer.asByteData()));
+  }
+  await monoLoader.load();
 }
 
 /// The SDK's own copy of Roboto and the Material icon font.
@@ -95,6 +109,7 @@ void main() {
       'port': 47811,
       'source': 7,
       'rate': 48000,
+      'known': '',
     };
     _network = {'transport': 'wifi', 'ip': '192.168.1.9', 'prefix': 24};
 
@@ -167,45 +182,76 @@ void main() {
     await _shoot(tester, '7-muted-but-connected');
   });
 
-  /// The state the sweep produces, which a widget test has no network to produce for itself: two
-  /// machines answered and one of them is picked. It is the screen he will look at most, and
-  /// without this it would never be looked at before it shipped.
-  testWidgets('two PCs answered', (tester) async {
-    await _openWidget(
-      tester,
-      PcPicker(
-        found: const [
-          Found(Destination('192.168.1.13', 47811), Duration(milliseconds: 3)),
-          Found(Destination('192.168.1.20', 47811), Duration(milliseconds: 41)),
-        ],
-        searching: false,
-        selected: const Destination('192.168.1.13', 47811),
-        enabled: true,
-        host: TextEditingController(text: '192.168.1.13'),
-        port: TextEditingController(text: '47811'),
-        onPick: (_) {},
-        onChanged: () {},
-      ),
-    );
-    await _shoot(tester, '9-two-pcs-found');
+  /// The remembered list, which is what a dual-boot PC looks like: one machine, two addresses,
+  /// and names so they can be told apart. A widget test has no network, so nothing answers the
+  /// sweep — which is exactly the situation the remembered list was built for, and makes this the
+  /// honest picture of it.
+  testWidgets('two remembered PCs, one chosen', (tester) async {
+    _prefs = {
+      ..._prefs,
+      'host': '192.168.1.20',
+      'known': '[{"host":"192.168.1.20","port":47811,"name":"Windows","seen":2},'
+          '{"host":"192.168.1.37","port":47811,"name":"Linux","seen":1}]',
+    };
+    await _open(tester);
+    await _shoot(tester, '9-remembered-pcs');
   });
 
-  testWidgets('still looking for a PC', (tester) async {
-    await _openWidget(
+  testWidgets('typing one in', (tester) async {
+    await _open(tester);
+    await tester.tap(find.text('+ not listed? type it in'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.2');
+    await tester.pumpAndSettle();
+    await _shoot(tester, '10-typing-it-in');
+  });
+
+  /// The microphone row, open. Two ways to hear now rather than three -- the phone's own cleaner
+  /// was removed on 2026-10-26 -- plus the switch that asks the PC to do it instead.
+  testWidgets('the two ways to hear, and the cleaning switch', (tester) async {
+    await _open(tester);
+    await tester.tap(find.text('[+]').last);
+    await tester.pumpAndSettle();
+    await _shoot(tester, '11-audio-open');
+  });
+
+  /// The switch turned off. The line underneath must stop claiming anything.
+  testWidgets('cleaning switched off', (tester) async {
+    await _open(tester);
+    await tester.tap(find.text('[+]').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('[x]  clean the noise'));
+    await tester.pumpAndSettle();
+    await _shoot(tester, '12-cleaning-off');
+  });
+
+  /// 🔴 The case the whole two-bit protocol exists for: the switch says yes, and the PC says it
+  /// cannot. The panel must draw the PC's answer, not the switch's.
+  testWidgets('the pc is too old to clean', (tester) async {
+    await _open(tester);
+    await tester.tap(find.text('+ not listed? type it in'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.20');
+    await tester.pumpAndSettle();
+    await _start(tester);
+    await _stats(
       tester,
-      PcPicker(
-        found: const [],
-        searching: true,
-        selected: null,
-        enabled: true,
-        host: TextEditingController(),
-        port: TextEditingController(text: '47811'),
-        onPick: (_) {},
-        onChanged: () {},
-      ),
-      settle: false,
+      level: 0.4,
+      packets: 500,
+      answeredMsAgo: 20,
+      pcCanClean: false,
+      pcCleaning: false,
     );
-    await _shoot(tester, '10-looking');
+    // A confirmed session collapses to the quiet screen, so the way back to the switch is the
+    // way a thumb would really take it: tap the screen, then open the microphone row. This is
+    // also the proof that the switch IS reachable mid-session, which is the whole point of it
+    // being live.
+    await tester.tapAt(const Offset(200, 300));
+    await tester.pump(const Duration(milliseconds: 420));
+    await tester.pump(const Duration(milliseconds: 420));
+    await tester.tap(find.text('[+]').last);
+    await tester.pump(const Duration(milliseconds: 420));
+    await _shoot(tester, '13-pc-cannot-clean');
   });
 
   testWidgets('a VPN is up', (tester) async {
@@ -227,52 +273,6 @@ Future<void> _open(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// One widget on its own, in the app's own theme — for the pieces whose interesting states need a
-/// network the test does not have.
-Future<void> _openWidget(
-  WidgetTester tester,
-  Widget child, {
-  // A spinner never stops, so a screen with one in it can only ever be pumped a fixed amount —
-  // pumpAndSettle waits for an animation that is the point of the picture.
-  bool settle = true,
-}) async {
-  tester.view
-    ..physicalSize = Size(_size.width * _dpr, 520 * _dpr)
-    ..devicePixelRatio = _dpr;
-  addTearDown(tester.view.reset);
-
-  await tester.pumpWidget(
-    RepaintBoundary(
-      key: _rootKey,
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          brightness: Brightness.dark,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF3DDC97),
-            brightness: Brightness.dark,
-          ),
-          fontFamily: 'Roboto',
-          scaffoldBackgroundColor: const Color(0xFF0B1310),
-          inputDecorationTheme: const InputDecorationTheme(
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-        ),
-        home: Scaffold(
-          body: Padding(padding: const EdgeInsets.all(20), child: child),
-        ),
-      ),
-    ),
-  );
-  if (settle) {
-    await tester.pumpAndSettle();
-  } else {
-    await tester.pump(const Duration(milliseconds: 400));
-  }
-}
-
 Future<void> _start(WidgetTester tester) =>
     _emit(tester, {'event': 'started', 'rate': 48000, 'source': 7});
 
@@ -281,6 +281,8 @@ Future<void> _stats(
   required double level,
   required int packets,
   required int answeredMsAgo,
+  bool pcCanClean = true,
+  bool pcCleaning = true,
 }) =>
     _emit(tester, {
       'event': 'stats',
@@ -291,6 +293,8 @@ Future<void> _stats(
       'source': 7,
       'answeredMsAgo': answeredMsAgo,
       'pcBufferedMs': 60.5,
+      'pcCanClean': pcCanClean,
+      'pcCleaning': pcCleaning,
     });
 
 /// Pushes an event up the same channel the service uses, so the screen is driven exactly as a real
@@ -302,7 +306,11 @@ Future<void> _emit(WidgetTester tester, Map<String, Object?> event) async {
     const StandardMethodCodec().encodeSuccessEnvelope(event),
     (_) {},
   );
-  await tester.pumpAndSettle();
+  // ⚠️ Not pumpAndSettle. A confirmed session now shows the collapsed screen, whose ring breathes
+  // for as long as the session lasts — settling waits for an animation that never ends, and the
+  // run dies on a timeout having photographed nothing.
+  await tester.pump(const Duration(milliseconds: 420));
+  await tester.pump(const Duration(milliseconds: 420));
 }
 
 Future<void> _shoot(WidgetTester tester, String name) async {

@@ -13,6 +13,9 @@ pub mod audio;
 #[cfg(all(feature = "tray", any(target_os = "linux", target_os = "windows")))]
 pub mod autostart;
 pub mod cable;
+/// Cleaning the voice on this machine, after it arrives — see the file for why it is here and
+/// not on the phone.
+pub mod clean;
 pub mod engine;
 /// The text every front-end shows when nothing is arriving. Shared so the Windows wording is
 /// testable on Linux.
@@ -27,6 +30,8 @@ pub mod ring;
 #[cfg(feature = "tray")]
 pub mod trayui;
 pub mod virtualmic;
+/// Reading and writing the one audio file format Earshot produces.
+pub mod wav;
 /// The Win32 notification area. Windows has no `ksni`, so this is hand-rolled.
 #[cfg(all(feature = "tray", target_os = "windows"))]
 pub mod wintray;

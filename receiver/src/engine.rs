@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::audio;
+use crate::clean::{self, Cleaner};
 use crate::opus;
 use crate::proto::{self, Header, ParseError};
 use crate::reorder::{Release, Reorder};
@@ -43,6 +44,10 @@ pub struct Config {
     pub virtual_mic: bool,
     pub virtual_mic_name: String,
     pub verbose: bool,
+    /// Which noise cleaner runs on the voice after it arrives, if any.
+    pub clean: clean::Choice,
+    /// How hard that cleaner works. Ignored when nothing is cleaning.
+    pub clean_strength: clean::Strength,
 }
 
 impl Default for Config {
@@ -54,6 +59,11 @@ impl Default for Config {
             virtual_mic: false,
             virtual_mic_name: "Earshot".to_string(),
             verbose: false,
+            // On. The phone has no cleaner of its own any more -- this is where the noise is
+            // taken out, so the useful default is the one that does it. `--clean off` is a local
+            // veto and beats anything the phone asks for.
+            clean: clean::Choice::Dfn3,
+            clean_strength: clean::Strength::default(),
         }
     }
 }
@@ -89,6 +99,9 @@ pub struct Status {
     pub duplicates: AtomicU64,
     pub underruns: AtomicU64,
     pub ring_drops: AtomicU64,
+    /// Whether the voice is being cleaned at this moment -- a model that loaded, running on a
+    /// stream at a rate it can take, with the phone not refusing. Measured, never assumed.
+    pub cleaning: AtomicBool,
     pub rejected: AtomicU64,
     /// Frames that were lost on the network and rebuilt from the redundant copy in the next
     /// packet. Only Opus can do this; a climbing count means the channel is dropping packets and
@@ -486,6 +499,33 @@ fn pump(
     let mut resampled = Vec::with_capacity(8192);
     // Decoded Opus, before it becomes floats. Unused by a raw-PCM stream.
     let mut decoded = Vec::with_capacity(opus::MAX_FRAME_SAMPLES);
+    // The cleaned voice, before resampling. Separate from `pcm` because the cleaner gives back
+    // fewer samples than it was given until its first hop fills.
+    let mut cleaned = Vec::with_capacity(2048);
+
+    // The noise cleaner, built once. A cleaner that will not start is said out loud and then done
+    // without: arriving audio that is noisy beats arriving audio that is absent, and the one thing
+    // this program must never do is fail to carry the voice.
+    // The last answer given to the phone about cleaning, kept so the once-a-second report can
+    // show the same thing the phone was told rather than a second opinion.
+    let mut cleaning_state = proto::Cleaning::default();
+
+    let mut cleaner: Option<Cleaner> = match Cleaner::new(&config.clean, config.clean_strength) {
+        Ok(built) => {
+            if let Some(ref c) = built {
+                status.notice(format!(
+                    "   cleaning the voice with {} (+{:.0} ms)",
+                    config.clean.label(),
+                    c.delay_ms()
+                ));
+            }
+            built
+        }
+        Err(e) => {
+            status.notice(format!("! no noise cleaning: {e}"));
+            None
+        }
+    };
 
     // Which of the two audio formats this stream is in, and the decoder for it. Both are per
     // stream, not per packet: a sender does not change format mid-sentence, and the decoder has to
@@ -561,9 +601,26 @@ fn pump(
                 // The error is dropped on purpose: a reply that cannot be sent is a nicety the
                 // phone will notice for itself, and it must not interrupt audio that is arriving
                 // perfectly well.
+                // The phone's wish travels on every packet it sends, including a keepalive, so it
+                // is read here rather than in the audio path -- a phone that is only knocking
+                // still gets a truthful answer about what would happen if it streamed. It is read
+                // fresh from each packet and never remembered, which is what makes it impossible
+                // for a lost packet to leave the two ends disagreeing about something audible.
+                let clean_now = wants_clean(proto::clean_wish(header.flags));
+
                 if hello_due(last_hello.map(|t: Instant| t.elapsed()), new_peer) {
                     let mut reply = [0u8; proto::HEADER_LEN];
-                    proto::hello(&header, out.buffered_ms()).write(&mut reply);
+                    // What is said here is measured, never assumed: `possible` is a model that
+                    // actually loaded, and `active` is that model running on a stream at a rate it
+                    // can take. A badge that claimed more than it knew is a mistake already made
+                    // once in this protocol.
+                    cleaning_state = proto::Cleaning {
+                        possible: cleaner.is_some(),
+                        active: cleaner.is_some()
+                            && clean_now
+                            && status.src_rate.load(Ordering::Relaxed) == clean::REQUIRED_RATE,
+                    };
+                    proto::hello(&header, out.buffered_ms(), cleaning_state).write(&mut reply);
                     let _ = socket.send_to(&reply, from);
                     last_hello = Some(Instant::now());
                 }
@@ -600,10 +657,13 @@ fn pump(
                     kind.unwrap_or(Kind::Pcm),
                     &mut decoder,
                     &mut resampler,
+                    &mut cleaner,
+                    clean_now,
                     out,
                     status,
                     &mut decoded,
                     &mut pcm,
+                    &mut cleaned,
                     &mut resampled,
                 );
             }
@@ -629,6 +689,9 @@ fn pump(
             status
                 .buffered_ms_x10
                 .store((out.buffered_ms() * 10.0) as u32, Ordering::Relaxed);
+            status
+                .cleaning
+                .store(cleaning_state.active && !idle, Ordering::Relaxed);
             let s = &reorder.stats;
             status.lost.store(s.lost, Ordering::Relaxed);
             status.late.store(s.too_late, Ordering::Relaxed);
@@ -706,10 +769,13 @@ fn drain_reorder(
     kind: Kind,
     decoder: &mut Option<opus::Decoder>,
     resampler: &mut Resampler,
+    cleaner: &mut Option<Cleaner>,
+    clean_now: bool,
     out: &audio::Output,
     status: &Status,
     decoded: &mut Vec<i16>,
     pcm: &mut Vec<f32>,
+    cleaned: &mut Vec<f32>,
     resampled: &mut Vec<f32>,
 ) {
     // The sequence the next release belongs to, needed to ask the reorder buffer for the packet
@@ -737,9 +803,12 @@ fn drain_reorder(
                     decoded,
                     opus::DECODE_RATE,
                     resampler,
+                    cleaner,
+                    clean_now,
                     out,
                     status,
                     pcm,
+                    cleaned,
                     resampled,
                 );
             }
@@ -770,9 +839,12 @@ fn drain_reorder(
                     decoded,
                     opus::DECODE_RATE,
                     resampler,
+                    cleaner,
+                    clean_now,
                     out,
                     status,
                     pcm,
+                    cleaned,
                     resampled,
                 );
             }
@@ -798,8 +870,9 @@ fn drain_reorder(
                     *resampler = Resampler::new(src_rate, out.sample_rate);
                 }
                 s16le_to_f32(&frame, pcm);
+                let voice = clean_in_place(cleaner, clean_now, src_rate, pcm, cleaned);
                 resampled.clear();
-                resampler.process(pcm, resampled);
+                resampler.process(voice, resampled);
                 let pushed = out.ring.push(resampled);
                 status
                     .ring_drops
@@ -829,13 +902,17 @@ fn drain_reorder(
 /// The Opus path's share of what the raw-PCM path does inline. It is separate because the Opus
 /// path reaches it from three places — a decoded frame, a recovered one and a concealed one — and
 /// all three must sound alike.
+#[allow(clippy::too_many_arguments)]
 fn push_samples(
     samples: &[i16],
     src_rate: u32,
     resampler: &mut Resampler,
+    cleaner: &mut Option<Cleaner>,
+    clean_now: bool,
     out: &audio::Output,
     status: &Status,
     pcm: &mut Vec<f32>,
+    cleaned: &mut Vec<f32>,
     resampled: &mut Vec<f32>,
 ) {
     if resampler.rates().0 != src_rate {
@@ -852,12 +929,48 @@ fn push_samples(
         *resampler = Resampler::new(src_rate, out.sample_rate);
     }
     i16_to_f32(samples, pcm);
+    let voice = clean_in_place(cleaner, clean_now, src_rate, pcm, cleaned);
     resampled.clear();
-    resampler.process(pcm, resampled);
+    resampler.process(voice, resampled);
     let pushed = out.ring.push(resampled);
     status
         .ring_drops
         .fetch_add((resampled.len() - pushed) as u64, Ordering::Relaxed);
+}
+
+/// Whether the phone's wish means cleaning should run.
+///
+/// An unstated wish is an older app that does not know about this, and the local setting decides —
+/// which is on. A stated *no* is obeyed exactly.
+fn wants_clean(wish: proto::CleanWish) -> bool {
+    !matches!(wish, proto::CleanWish::No)
+}
+
+/// Runs the cleaner, if there is one and if the stream is at the rate it needs.
+///
+/// Returns whichever buffer the caller should go on to resample: the cleaned one, or the original
+/// when nothing cleaned it. That is why this hands back a slice rather than writing in place --
+/// the two buffers have different lengths, because a cleaner works in whole hops and holds back
+/// what does not fill one.
+///
+/// ⚠️ **Cleaning happens before resampling, not after.** The models want 48 kHz, and the sound
+/// card's rate is whatever the sound card says. A stream at any other rate is left alone rather
+/// than resampled into the model and back out, which would cost more than the noise does.
+fn clean_in_place<'a>(
+    cleaner: &mut Option<Cleaner>,
+    clean_now: bool,
+    src_rate: u32,
+    pcm: &'a [f32],
+    cleaned: &'a mut Vec<f32>,
+) -> &'a [f32] {
+    match cleaner {
+        Some(c) if clean_now && src_rate == clean::REQUIRED_RATE => {
+            cleaned.clear();
+            c.process(pcm, cleaned);
+            cleaned
+        }
+        _ => pcm,
+    }
 }
 
 #[cfg(test)]

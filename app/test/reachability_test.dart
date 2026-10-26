@@ -61,13 +61,18 @@ void main() {
       expect(r.blocks, isFalse);
     });
 
-    test('mobile data towards a public address only warns — it is not the same mistake', () {
+    /// ⚠️ This used to be a warning, on the reasoning that mobile data towards a public address
+    /// is at least coherent — unlike mobile data towards a home address, which cannot work at all.
+    /// It now blocks, because coherent is not the same as safe: the audio is unencrypted, so that
+    /// combination is a live microphone crossing the internet in the clear.
+    test('mobile data towards a public address is refused, not merely doubted', () {
       final r = reachability(
         const NetworkState(transport: 'cellular'),
         const Destination('203.0.113.7', defaultPort),
       );
-      expect(r.verdict, Reach.warn);
-      expect(r.blocks, isFalse);
+      expect(r.verdict, Reach.blocked);
+      expect(r.blocks, isTrue);
+      expect(r.detail, contains('without encryption'));
     });
 
     test('joined but not yet given an address warns, and does not accuse the network', () {
@@ -152,5 +157,44 @@ void main() {
     expect(subnetLabel('192.168.5.9', 24), '192.168.5.x');
     expect(subnetLabel('192.168.5.9', 16), '192.168.x.x');
     expect(subnetLabel('10.5.9.2', 8), '10.x.x.x');
+  });
+
+  group('a public address is refused', () {
+    // Earshot sends the microphone unencrypted. On a home network that is a considered trade; on
+    // the open internet it is a live microphone in the clear, so the app refuses rather than
+    // warns. His question about IP addresses leaking is what put this here.
+    const wifi = NetworkState(
+      transport: 'wifi',
+      ip: '192.168.1.9',
+      prefix: 24,
+      localIp: '192.168.1.9',
+      localPrefix: 24,
+    );
+
+    test('a routable address blocks, whatever the phone is on', () {
+      for (final host in ['93.184.216.34', '8.8.8.8', '5.95.128.140']) {
+        final verdict = reachability(wifi, Destination(host, 47811));
+        expect(verdict.blocks, isTrue, reason: host);
+        expect(verdict.headline, contains('on the internet'));
+      }
+    });
+
+    test('private, carrier-grade NAT and loopback are all fine', () {
+      for (final host in [
+        '192.168.1.13',
+        '10.0.0.5',
+        '172.20.1.1',
+        '100.102.242.17', // Tailscale
+        '127.0.0.1',
+      ]) {
+        expect(isPublicAddress(host), isFalse, reason: host);
+      }
+    });
+
+    test('a name is not judged here, because it cannot be', () {
+      // Resolving is the network's job. Guessing would block the one case that works.
+      expect(isPublicAddress('desktop.local'), isFalse);
+      expect(isPublicAddress(''), isFalse);
+    });
   });
 }

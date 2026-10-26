@@ -171,22 +171,29 @@ fn run(args: &Args) -> Result<(), String> {
     for n in 0..total_frames {
         // A gentle envelope so the tone is obviously "a signal" and not a stuck buzzer.
         let env = 0.25 + 0.2 * (start.elapsed().as_secs_f64() * std::f64::consts::TAU / 3.0).sin();
-        for (i, sample) in samples.iter_mut().enumerate() {
+        for sample in samples.iter_mut() {
             let v = (phase.sin() * env * i16::MAX as f64) as i16;
             phase += step;
             if phase > std::f64::consts::TAU {
                 phase -= std::f64::consts::TAU;
             }
             *sample = v;
-            let off = proto::HEADER_LEN + i * 2;
-            packet[off..off + 2].copy_from_slice(&v.to_le_bytes());
         }
 
-        // Compressing changes the payload length every frame, so the packet is rebuilt rather
-        // than written into in place.
-        if let Some(encoder) = encoder.as_mut() {
-            packet.truncate(proto::HEADER_LEN);
-            encoder.encode(&samples, &mut packet)?;
+        // The payload is written after the samples exist, and never into a buffer whose length is
+        // assumed: compressing leaves `packet` as long as that frame happened to compress to, so
+        // writing raw samples at fixed offsets would index off the end of the second frame
+        // onwards. It did, until 2026-10-26 -- `--opus` sent exactly one frame and panicked.
+        packet.truncate(proto::HEADER_LEN);
+        match encoder.as_mut() {
+            Some(encoder) => {
+                encoder.encode(&samples, &mut packet)?;
+            }
+            None => {
+                for sample in &samples {
+                    packet.extend_from_slice(&sample.to_le_bytes());
+                }
+            }
         }
 
         let header = Header {

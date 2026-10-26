@@ -40,6 +40,25 @@ OPTIONS:
     -v, --verbose              log every dropped/odd packet
     -h, --help                 this text
 
+NOISE CLEANING:
+        --clean <WHAT>         clean the voice on this machine, after it arrives
+                               on    DeepFilterNet 3, built in. Adds 20 ms  [default]
+                               off   nothing is touched. A local veto: it beats
+                                     anything the phone asks for
+                               <FILE>  any other model archive, such as the
+                                       low-latency DeepFilterNet 3, which adds
+                                       no delay at all and cleans a little less
+        --atten <DB>           the most the noise may be turned down [default: 100]
+                               lower leaves some of the room in: 20 or 30 sounds
+                               more natural on a quiet desk
+        --post-filter          chase the quiet residue behind the voice. Cleaner,
+                               very slightly more processed
+
+    On by default, because the phone has none: its own cleaner was removed once a
+    keyboard was still audible through it. The phone asks for this one with a flag and
+    can switch it off mid-session. 48 kHz streams only - a 16 kHz stream, which is what
+    the phone's voice-call source often gives, is passed through untouched.
+
 VIRTUAL MICROPHONE:
     -m, --virtual-mic          make other apps see Earshot as an input device, instead of
                                playing out of the speakers. Then pick it in the input list
@@ -76,6 +95,16 @@ fn parse_args() -> Result<Args, String> {
             "-d" | "--device" => args.config.device = Some(value("--device")?),
             "--list-devices" => args.list_devices = true,
             "-v" | "--verbose" => args.config.verbose = true,
+            "--clean" => {
+                args.config.clean = earshot::clean::Choice::parse(&value("--clean")?);
+            }
+            "--atten" => {
+                let v = value("--atten")?;
+                args.config.clean_strength.atten_lim_db = v
+                    .parse()
+                    .map_err(|_| format!("--atten wants a number of dB, got '{v}'"))?;
+            }
+            "--post-filter" => args.config.clean_strength.post_filter = true,
             "-m" | "--virtual-mic" => args.config.virtual_mic = true,
             "--virtual-mic-name" => args.config.virtual_mic_name = value("--virtual-mic-name")?,
             "--remove-virtual-mic" => args.remove_virtual_mic = true,
@@ -262,8 +291,15 @@ fn run(config: Config) -> Result<(), String> {
                 .filter(|(n, _)| *n > 0)
                 .map(|(n, label)| format!("  {label} {n}"))
                 .collect::<String>();
+                // Said plainly and only while it is true, so the line never claims cleaning that
+                // is not happening -- a 16 kHz stream, or a phone that asked for none.
+                let cleaning = if status.cleaning.load(Ordering::Relaxed) {
+                    "  cleaned"
+                } else {
+                    ""
+                };
                 println!(
-                    "{:>5} pkt/s  {:>4} kbps  buffered {:>5.1} ms  lost {}  late {}  dup {}  underruns {}{}",
+                    "{:>5} pkt/s  {:>4} kbps  buffered {:>5.1} ms  lost {}  late {}  dup {}  underruns {}{}{}",
                     status.pkt_per_sec.load(Ordering::Relaxed),
                     status.kbps.load(Ordering::Relaxed),
                     status.buffered_ms(),
@@ -272,6 +308,7 @@ fn run(config: Config) -> Result<(), String> {
                     status.duplicates.load(Ordering::Relaxed),
                     status.underruns.load(Ordering::Relaxed),
                     extra,
+                    cleaning,
                 );
             }
         }

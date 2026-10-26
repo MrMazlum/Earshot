@@ -44,6 +44,40 @@ object Protocol {
     const val FLAG_ENC = 0x02
     const val FLAG_MARK = 0x04
 
+    /**
+     * Phone → PC: **clean this voice on the PC.** A wish, not a report.
+     *
+     * Noise cleaning lives on the PC because that is where the processor is: the model there is far
+     * stronger on keyboards and mouse clicks than anything this phone can carry, which is why the
+     * phone no longer carries one at all.
+     */
+    const val FLAG_CLEAN = 0x08
+
+    /**
+     * Phone → PC: **this phone states its wish in [FLAG_CLEAN], whichever way that bit is set.**
+     *
+     * Without this bit a clear [FLAG_CLEAN] is ambiguous — a phone saying *no* and a phone too old
+     * to say anything both put a zero there. Set on every packet this app sends, so *no* is heard
+     * as *no*.
+     */
+    const val FLAG_SAYS_CLEAN = 0x10
+
+    /** PC → phone: the receiver is cleaning the voice right now. */
+    const val FLAG_CLEANING = 0x08
+
+    /** PC → phone: the receiver has a working noise model and could clean if asked. */
+    const val FLAG_CAN_CLEAN = 0x10
+
+    /**
+     * The flags to send, given what the user asked for.
+     *
+     * The wish rides on **every** packet rather than in a control packet of its own: this is UDP,
+     * a control packet can be the one that is lost, and then the two ends disagree about something
+     * the user can hear. A bit re-asserted fifty times a second cannot drift.
+     */
+    fun cleanFlags(wanted: Boolean): Int =
+        FLAG_SAYS_CLEAN or (if (wanted) FLAG_CLEAN else 0)
+
     const val SAMPLE_RATE = 48000
     const val FRAME_MS = 20
     const val FRAME_SAMPLES = SAMPLE_RATE / 1000 * FRAME_MS // 960
@@ -51,8 +85,20 @@ object Protocol {
     /** Frame samples for a rate other than 48k (the phone may force 16k — see the AudioSource trap). */
     fun frameSamples(rate: Int): Int = rate / 1000 * FRAME_MS
 
-    /** What a [TYPE_HELLO] carries: an echo, and how much audio the PC is holding. */
-    data class Hello(val sequence: Int, val bufferedMsX10: Int)
+    /**
+     * What a [TYPE_HELLO] carries: an echo, how much audio the PC is holding, and what it is doing
+     * about noise.
+     *
+     * [canClean] and [cleaning] are separate facts on purpose. *Could* is what lets the app offer
+     * the switch at all; *is* is what lets it show the truth rather than its own hope — and a
+     * badge that claimed more than it knew is a mistake this app has already made once.
+     */
+    data class Hello(
+        val sequence: Int,
+        val bufferedMsX10: Int,
+        val canClean: Boolean,
+        val cleaning: Boolean,
+    )
 
     /**
      * Reads a datagram as the PC's reply to *this* session, or returns null.
@@ -71,11 +117,18 @@ object Protocol {
         val b2 = buf[2].toInt() and 0xFF
         if ((b2 shr 4) != VERSION) return null
         if ((b2 and 0x0F) != TYPE_HELLO) return null
+        val flags = buf[3].toInt() and 0xFF
         val bb = ByteBuffer.wrap(buf, 0, HEADER_LEN).order(ByteOrder.BIG_ENDIAN)
         val sequence = bb.getInt(4)
         val bufferedMsX10 = bb.getInt(8)
         if (bb.getInt(12) != ssrc) return null
-        return Hello(sequence, bufferedMsX10)
+        // An older receiver sends zero here, which reads correctly as "cannot, and is not".
+        return Hello(
+            sequence,
+            bufferedMsX10,
+            canClean = (flags and FLAG_CAN_CLEAN) != 0,
+            cleaning = (flags and FLAG_CLEANING) != 0,
+        )
     }
 
     /**

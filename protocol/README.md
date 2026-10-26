@@ -66,11 +66,51 @@ successful `send()`. See [The reply](#the-reply).
 
 ### Flags
 
+The same byte means different things in the two directions, because only one packet type ever
+travels PC → phone and it has no payload to put an answer in.
+
+**Phone → PC**, on any packet:
+
 | Bit | Name | Meaning |
 |---|---|---|
 | `0x01` | `FEC` | unused. Opus carries its redundant copies inside the packet, so recovery needs no flag |
 | `0x02` | `ENC` | payload is encrypted. Not implemented yet |
 | `0x04` | `MARK` | first packet after a silence |
+| `0x08` | `CLEAN` | **clean this voice on the PC.** The phone's wish, not a report |
+| `0x10` | `SAYS_CLEAN` | **this phone states its wish in bit `0x08`, whichever way it is set** |
+
+**PC → phone**, in a `HELLO`:
+
+| Bit | Name | Meaning |
+|---|---|---|
+| `0x08` | `CLEANING` | the receiver is cleaning the voice **right now** |
+| `0x10` | `CAN_CLEAN` | the receiver has a working noise model and could clean if asked |
+
+### Cleaning the voice, and why it takes two bits each way
+
+Noise cleaning runs on the PC, which has the processor for a model far stronger than a phone can
+carry. Whether it runs is the phone's choice, so the phone has to be able to say *no* as clearly as
+it says *yes* — and a receiver has to be able to tell **a phone that said no** from **a phone too
+old to say anything**, because both of those put a zero in bit `0x08`. That is what `SAYS_CLEAN`
+is for:
+
+| `SAYS_CLEAN` | `CLEAN` | What the receiver does |
+|---|---|---|
+| 0 | — | the phone is not asking either way. The receiver follows its own setting, which is **on** by default |
+| 1 | 1 | clean |
+| 1 | 0 | **do not clean**, whatever the receiver's own setting says |
+
+A receiver with cleaning switched off locally never cleans and never sets `CLEANING`, whatever the
+phone asks: a local *off* is a veto, not a preference.
+
+**The wish rides on every audio packet rather than in a control packet of its own.** This is UDP: a
+control packet can be the one that is lost, and then the two ends disagree about something the user
+can hear until the next one happens along. A bit that is re-asserted fifty times a second cannot
+drift, needs no handshake, and has nothing to go stale.
+
+The two reply bits exist for the same reason the `HELLO` itself does. `CAN_CLEAN` is what lets the
+phone offer the switch at all; `CLEANING` is what lets it show the truth rather than its own hope —
+and a green badge that claimed more than it knew is a mistake this protocol has already made once.
 
 ### One stream, one format
 
@@ -138,6 +178,9 @@ answer the phone with:
 | timestamp | how much audio the receiver is holding, in **tenths of a millisecond** (so `605` is 60.5 ms). Not a sample count — this is the one packet where that field means something else |
 | ssrc | the phone's own `ssrc`, echoed back |
 
+Its `flags` byte is the receiver's own, and carries `CLEANING` and `CAN_CLEAN` as above. A receiver
+that does not know about cleaning sends zero there, which reads correctly as *cannot, and is not*.
+
 ### Why it exists
 
 A phone sending UDP learns nothing. `send()` succeeds whether the datagram reaches the PC, is
@@ -180,6 +223,13 @@ already handled:
 |---|---|
 | New phone, old PC | no reply ever comes. The phone says *sending, but the PC is not answering* and names the likely cause. Audio still works if the PC is in fact receiving |
 | Old phone, new PC | the replies arrive at a socket the old app never reads, and the operating system discards them. Nothing changes |
+
+The cleaning bits mismatch the same way, in both directions, with no negotiation:
+
+| | |
+|---|---|
+| New phone, old PC | the flags are in a byte the old receiver reads and ignores. No reply bit comes back, so the phone reports *this PC cannot clean* and does not pretend otherwise |
+| Old phone, new PC | `SAYS_CLEAN` is absent, so the receiver follows its own setting. Cleaning on by default means an old phone gets cleaned without knowing it asked |
 
 ## Rules a receiver must follow
 

@@ -26,6 +26,44 @@ pub const FLAG_FEC: u8 = 0x01;
 pub const FLAG_ENC: u8 = 0x02;
 pub const FLAG_MARK: u8 = 0x04;
 
+/// Phone -> PC: **clean this voice on the PC**. A wish, not a report.
+pub const FLAG_CLEAN: u8 = 0x08;
+/// Phone -> PC: **this phone states its wish in [`FLAG_CLEAN`], whichever way that bit is set.**
+///
+/// Without this bit a clear `FLAG_CLEAN` is ambiguous: a phone saying *no* and a phone too old to
+/// say anything both put a zero there. With it, *no* is audible as *no*.
+pub const FLAG_SAYS_CLEAN: u8 = 0x10;
+
+/// PC -> phone, in a [`TYPE_HELLO`]: the receiver is cleaning the voice **right now**.
+pub const FLAG_CLEANING: u8 = 0x08;
+/// PC -> phone, in a [`TYPE_HELLO`]: the receiver has a working noise model and could clean.
+///
+/// This is what lets the phone offer the switch at all. Zero from an older receiver reads
+/// correctly as *cannot, and is not*.
+pub const FLAG_CAN_CLEAN: u8 = 0x10;
+
+/// What the phone asked for, read off the flags of a packet it sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanWish {
+    /// The phone said nothing either way -- an older app. The receiver follows its own setting.
+    Unstated,
+    /// Clean it.
+    Yes,
+    /// Do not clean it, whatever the receiver would have chosen.
+    No,
+}
+
+/// Reads the two cleaning bits. The whole of the phone's half of this feature.
+pub fn clean_wish(flags: u8) -> CleanWish {
+    if flags & FLAG_SAYS_CLEAN == 0 {
+        CleanWish::Unstated
+    } else if flags & FLAG_CLEAN != 0 {
+        CleanWish::Yes
+    } else {
+        CleanWish::No
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
     pub version: u8,
@@ -89,15 +127,34 @@ impl Header {
 /// `buffered_ms` goes out in tenths of a millisecond, which keeps a useful figure inside a u32
 /// without inventing a float encoding for one packet a second. A NaN or a negative reads as zero:
 /// float-to-integer casts saturate in Rust, and a nonsense buffer depth must not become a huge one.
-pub fn hello(answering: &Header, buffered_ms: f32) -> Header {
+pub fn hello(answering: &Header, buffered_ms: f32, cleaning: Cleaning) -> Header {
+    let mut flags = 0u8;
+    if cleaning.possible {
+        flags |= FLAG_CAN_CLEAN;
+    }
+    if cleaning.active {
+        flags |= FLAG_CLEANING;
+    }
     Header {
         version: VERSION,
         ptype: TYPE_HELLO,
-        flags: 0,
+        flags,
         sequence: answering.sequence,
         timestamp: (buffered_ms * 10.0) as u32,
         ssrc: answering.ssrc,
     }
+}
+
+/// What the receiver tells the phone about cleaning, in a [`hello`].
+///
+/// Two separate facts, because *could* and *is* are different answers and the phone shows them
+/// differently: a switch it may offer, against a state it may claim.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Cleaning {
+    /// A working noise model is loaded, so cleaning is available.
+    pub possible: bool,
+    /// It is running on this stream at this moment.
+    pub active: bool,
 }
 
 /// Wrapping-aware sequence distance: `a - b`, positive when `a` is newer.
@@ -176,7 +233,7 @@ mod tests {
     #[test]
     fn a_hello_echoes_the_phone_back_to_itself() {
         let asked = sample_header();
-        let reply = hello(&asked, 60.5);
+        let reply = hello(&asked, 60.5, Cleaning::default());
 
         assert_eq!(reply.ptype, TYPE_HELLO);
         assert_eq!(reply.version, VERSION);
@@ -191,9 +248,12 @@ mod tests {
     #[test]
     fn a_nonsense_buffer_depth_reads_as_zero() {
         let asked = sample_header();
-        assert_eq!(hello(&asked, f32::NAN).timestamp, 0);
-        assert_eq!(hello(&asked, -3.0).timestamp, 0);
-        assert_eq!(hello(&asked, f32::INFINITY).timestamp, u32::MAX);
+        assert_eq!(hello(&asked, f32::NAN, Cleaning::default()).timestamp, 0);
+        assert_eq!(hello(&asked, -3.0, Cleaning::default()).timestamp, 0);
+        assert_eq!(
+            hello(&asked, f32::INFINITY, Cleaning::default()).timestamp,
+            u32::MAX
+        );
     }
 
     /// A reply is 16 bytes, and every packet that earns one is at least 16 bytes. That inequality
@@ -201,7 +261,7 @@ mod tests {
     #[test]
     fn a_hello_is_never_larger_than_what_provoked_it() {
         let mut buf = [0u8; HEADER_LEN];
-        let written = hello(&sample_header(), 0.0).write(&mut buf);
+        let written = hello(&sample_header(), 0.0, Cleaning::default()).write(&mut buf);
         assert_eq!(written, HEADER_LEN);
     }
 
@@ -235,5 +295,95 @@ mod tests {
         assert_eq!(pcm_rate_from_payload(0), None);
         assert_eq!(pcm_rate_from_payload(1921), None);
         assert_eq!(pcm_rate_from_payload(9999999), None);
+    }
+}
+
+#[cfg(test)]
+mod clean_flag_tests {
+    use super::*;
+
+    /// The whole reason `SAYS_CLEAN` exists: a phone refusing and a phone too old to answer both
+    /// put a zero in `CLEAN`, and they must not be read the same way.
+    #[test]
+    fn a_refusal_is_not_an_old_phone() {
+        assert_eq!(clean_wish(0), CleanWish::Unstated);
+        assert_eq!(clean_wish(FLAG_MARK), CleanWish::Unstated);
+        assert_eq!(clean_wish(FLAG_SAYS_CLEAN), CleanWish::No);
+        assert_eq!(clean_wish(FLAG_SAYS_CLEAN | FLAG_CLEAN), CleanWish::Yes);
+    }
+
+    /// A phone that sets `CLEAN` without `SAYS_CLEAN` is not speaking this protocol, and its stray
+    /// bit must not be obeyed.
+    #[test]
+    fn the_wish_bit_alone_says_nothing() {
+        assert_eq!(clean_wish(FLAG_CLEAN), CleanWish::Unstated);
+    }
+
+    #[test]
+    fn the_reply_carries_what_the_receiver_can_and_is_doing() {
+        let asked = Header {
+            version: VERSION,
+            ptype: TYPE_OPUS,
+            flags: FLAG_SAYS_CLEAN | FLAG_CLEAN,
+            sequence: 42,
+            timestamp: 7,
+            ssrc: 0xABCD,
+        };
+
+        let nothing = hello(&asked, 60.5, Cleaning::default());
+        assert_eq!(nothing.flags, 0, "a receiver with no model must claim nothing");
+
+        let could = hello(
+            &asked,
+            60.5,
+            Cleaning {
+                possible: true,
+                active: false,
+            },
+        );
+        assert_eq!(could.flags, FLAG_CAN_CLEAN);
+
+        let doing = hello(
+            &asked,
+            60.5,
+            Cleaning {
+                possible: true,
+                active: true,
+            },
+        );
+        assert_eq!(doing.flags, FLAG_CAN_CLEAN | FLAG_CLEANING);
+
+        // The borrowed fields still mean what they meant before the flags were added.
+        assert_eq!(doing.sequence, 42);
+        assert_eq!(doing.ssrc, 0xABCD);
+        assert_eq!(doing.timestamp, 605);
+        assert_eq!(doing.ptype, TYPE_HELLO);
+    }
+
+    /// The flags go out in the byte the phone reads, and survive a round trip through the wire.
+    #[test]
+    fn the_reply_flags_survive_the_wire() {
+        let asked = Header {
+            version: VERSION,
+            ptype: TYPE_KEEPALIVE,
+            flags: 0,
+            sequence: 1,
+            timestamp: 0,
+            ssrc: 9,
+        };
+        let reply = hello(
+            &asked,
+            0.0,
+            Cleaning {
+                possible: true,
+                active: true,
+            },
+        );
+        let mut bytes = [0u8; HEADER_LEN];
+        reply.write(&mut bytes);
+        let (parsed, payload) = Header::parse(&bytes).expect("a hello must parse");
+        assert!(payload.is_empty());
+        assert_eq!(parsed.flags & FLAG_CLEANING, FLAG_CLEANING);
+        assert_eq!(parsed.flags & FLAG_CAN_CLEAN, FLAG_CAN_CLEAN);
     }
 }

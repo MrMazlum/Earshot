@@ -152,6 +152,23 @@ String subnetLabel(String ip, int prefix) {
   return '${octets[0]}.x.x.x';
 }
 
+/// True for an address that is not on anybody's home network — a public one, reachable from the
+/// internet.
+///
+/// Only decidable for a literal IPv4 address. A name (`desktop.local`, a hostname) is not judged
+/// here: resolving it is the network's job and guessing would block the one case that works.
+bool isPublicAddress(String host) {
+  final octets = _ipv4(host);
+  if (octets == null) return false;
+  if (isPrivateAddress(host)) return false;
+  // 100.64–100.127 is carrier-grade NAT, which is what Tailscale hands out. Private in every sense
+  // that matters here: it is not reachable from the internet and it is somebody's own machines.
+  if (octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127) return false;
+  if (octets[0] == 127) return false; // loopback, which is a developer testing
+  if (octets[0] == 169 && octets[1] == 254) return false; // link-local
+  return true;
+}
+
 /// What to tell someone about their chances, before they press Start.
 Reachability reachability(NetworkState net, Destination? target) {
   if (net.transport == 'unknown') {
@@ -188,6 +205,21 @@ Reachability reachability(NetworkState net, Destination? target) {
 
   final host = target.host;
   final private = isPrivateAddress(host);
+
+  // Refused outright, on every network, before anything else is considered.
+  //
+  // Earshot sends the microphone **unencrypted** — that is written in the protocol and in the
+  // README, and it is fine on a home network. A public address is a live microphone crossing the
+  // open internet in the clear, past every machine on the way. Nothing about the rest of this
+  // function matters if that is what is about to happen.
+  if (isPublicAddress(host)) {
+    return Reachability(
+      Reach.blocked,
+      'That address is on the internet',
+      detail: '$host is not a home-network address, and Earshot sends your microphone without '
+          'encryption. Use an address on your own network, or a VPN that puts your PC on it.',
+    );
+  }
 
   switch (net.transport) {
     case 'none':

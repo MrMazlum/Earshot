@@ -48,6 +48,9 @@ object Bus {
      * It rides with the stats rather than being its own event because it is a gauge on the same
      * clock, not a transition. What counts as *too* long is decided in one place in the UI, so the
      * two halves of the app cannot drift apart on the threshold.
+     *
+     * The three cleaning values ride here for the same reason: they are gauges read off the PC's
+     * replies, not events, and they change whenever the PC's answer changes.
      */
     fun emitStats(
         packets: Long,
@@ -57,6 +60,9 @@ object Bus {
         source: Int,
         answeredMsAgo: Long,
         pcBufferedMs: Float,
+        cleanWanted: Boolean,
+        pcCanClean: Boolean,
+        pcCleaning: Boolean,
     ) {
         post(
             mapOf(
@@ -68,6 +74,12 @@ object Bus {
                 "source" to source,
                 "answeredMsAgo" to answeredMsAgo,
                 "pcBufferedMs" to pcBufferedMs,
+                // Three separate facts, and the UI must not collapse them: what was asked for,
+                // what the PC is able to do, and what it says it is doing. A switch that drew
+                // only the first would claim cleaning against a PC too old to do any.
+                "cleanWanted" to cleanWanted,
+                "pcCanClean" to pcCanClean,
+                "pcCleaning" to pcCleaning,
             )
         )
     }

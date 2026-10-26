@@ -26,6 +26,30 @@ cargo run --release --bin earshot-receiver -- --virtual-mic
 Then pick **Earshot** in Discord's input list. The device is created on first use and left loaded
 afterwards, so applications do not forget which input you chose; `--remove-virtual-mic` deletes it.
 
+### Noise cleaning
+
+```sh
+cargo run --release --bin earshot-receiver -- --clean on     # the default
+cargo run --release --bin earshot-receiver -- --clean off    # a local veto
+```
+
+**On by default**, because the phone has no cleaner of its own: it was removed on 2026-10-26, when a
+keyboard was still audible through RNNoise. DeepFilterNet 3 is built in; it adds 20 ms and costs
+about a thirtieth of real time.
+
+`--clean off` is a veto and beats anything the phone asks for. Anything other than `on` or `off` is
+read as a path to a model archive — the low-latency DeepFilterNet 3 is the one worth trying, since it
+adds **no** delay and cleans a little less. It is not built in because it is 36 MB against this
+one's 8.
+
+⚠️ **DeepFilterNet 2 does not work here.** The pinned DeepFilterNet revision's `tract` aborts on a
+reshape it has not implemented. The panic is caught, so pointing `--clean` at that archive says so
+instead of killing the receiver.
+
+Which of this is actually happening is reported to the phone on every reply, as two separate facts —
+*could clean* and *is cleaning*. The phone draws those rather than drawing its own switch. See
+`protocol/README.md`.
+
 ### The tray
 
 ```bash
@@ -63,6 +87,8 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
 |---|---|
 | `proto.rs` | the wire format. Byte-identical to `app/android/.../Protocol.kt`, and `header_wire_bytes_are_frozen` is the test that keeps it that way. `parse` never panics — it reads packets from anyone on the LAN |
 | `reorder.rs` | puts packets back in order, declares gaps, refuses to play a packet that arrived after its turn, and resyncs if the sender restarts |
+| `clean.rs` | noise cleaning, with DeepFilterNet 3 built in. **Before the resampler, never after**: the model wants 48 kHz and the sound card's rate is whatever the sound card says |
+| `wav.rs` | enough wav to write a recording and read it back. Walks the chunk list rather than assuming the audio starts at byte 44 |
 | `resample.rs` | phone rate → sound-card rate, e.g. a 16 kHz mic into a 44.1 kHz card |
 | `ring.rs` | the lock-free handoff to the audio callback. Its fill level *is* the buffering latency |
 | `audio.rs` | cpal output. Everything in the callback is allocation- and lock-free |
@@ -72,6 +98,8 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
 | `autostart.rs` | the `~/.config/autostart` login item |
 | `main.rs` | terminal front-end: the banner and the once-a-second stats line |
 | `bin/tray.rs` | tray front-end: icon, menu, tooltip |
+| `bin/record.rs` | **dev tool.** Writes what the phone sends to a wav and plays nothing, so audio can be captured on a machine with no sound card |
+| `bin/clean.rs` | **dev tool.** Runs one recording through every cleaner, with each one's delay, speed and level change, so they are compared by ear rather than by claim |
 
 ## Rules that are not negotiable here
 
@@ -105,5 +133,9 @@ that closes before an error can be read, and inbound UDP dropped by the firewall
 indistinguishable from a phone that is not sending.
 
 ## Not here yet
+
+- **A cleaning toggle in the tray menu.** `--clean` works and the phone's switch works; the tray has
+  no tick for it yet, because it was written on a machine with no graphical session and an unseen
+  menu is not a shipped menu.
 
 Opus decoding (needs `libopus-dev`), the PC → phone direction, discovery and encryption.

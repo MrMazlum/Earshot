@@ -1,10 +1,16 @@
-# libopus, plus the few lines of JNI that let Kotlin reach it.
+# The native audio half: libopus for compression, and the few lines of JNI that let Kotlin reach it.
+#
+# There was a noise suppressor here too -- RNNoise, built for Android over four separate build
+# faults. It was removed on 2026-10-26, the day after it was first heard: it is a 2017 model built
+# for STEADY noise and the verdict was that a keyboard and mouse still came through it. Cleaning
+# moved to the PC, where there is the processor for a model that handles transients, and the phone
+# now simply asks for it with a flag. See protocol/README.md.
 #
 # Why the real library rather than Android's built-in MediaCodec Opus encoder:
 #
 #   - MediaCodec's Opus encoder expects 48 kHz. Earshot's capture rate is not always 48 kHz: the
-#     noise-cancelled voice source on many phones only offers 16 kHz, and libopus takes that
-#     directly while MediaCodec would need us to resample first.
+#     voice-call source on many phones only offers 16 kHz, and libopus takes that directly while
+#     MediaCodec would need us to resample first.
 #   - It gives no control over in-band forward error correction. The receiver rebuilds a lost frame
 #     from the redundant copy in the next packet, and only the encoder can decide to put one there.
 #   - It is a vendor codec, so its behaviour varies by phone. libopus behaves the same everywhere,
@@ -18,9 +24,22 @@
 # the build directory afterwards.
 
 cmake_minimum_required(VERSION 3.18)
-project(earshot_opus C)
+project(earshot_audio C)
 
 include(FetchContent)
+
+# Where the fetched sources live.
+#
+# ⚠️ Android builds this directory **once per processor** — arm64, arm32, x86_64 — and by default
+# each of those gets its own `_deps`, so a clean build downloads Opus three times. On a slow link
+# that is most of the build.
+#
+# Pointing the cache outside the build tree makes it survive `flutter clean` as well, so the only
+# machine that ever waits for these downloads is one that has never built Earshot. Still one cache
+# per processor: two configures running at once must not share a download directory.
+if(DEFINED ENV{HOME})
+    set(FETCHCONTENT_BASE_DIR "$ENV{HOME}/.cache/earshot-native/${ANDROID_ABI}" CACHE PATH "" FORCE)
+endif()
 
 set(OPUS_VERSION 1.5.2)
 
@@ -39,9 +58,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(opus)
 
-add_library(earshot_opus SHARED opus_jni.c)
+add_library(earshot_audio SHARED opus_jni.c)
 
-target_link_libraries(earshot_opus PRIVATE opus log)
+target_link_libraries(earshot_audio PRIVATE opus log)
 
-# -O2 and no exceptions: this runs once per 20 ms frame on the audio path.
-target_compile_options(earshot_opus PRIVATE -O2 -Wall -Wextra)
+# -O2: this runs once per 20 ms frame on the audio path.
+target_compile_options(earshot_audio PRIVATE -O2 -Wall -Wextra)

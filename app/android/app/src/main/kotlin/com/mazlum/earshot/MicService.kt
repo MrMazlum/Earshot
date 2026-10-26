@@ -37,10 +37,16 @@ class MicService : Service() {
         const val ACTION_START = "com.mazlum.earshot.START"
         const val ACTION_STOP = "com.mazlum.earshot.STOP"
         const val ACTION_MUTE = "com.mazlum.earshot.MUTE"
+
+        /** Turn the PC's noise cleaning on or off, mid-session, the way [ACTION_MUTE] works. */
+        const val ACTION_CLEAN = "com.mazlum.earshot.CLEAN"
         const val EXTRA_HOST = "host"
         const val EXTRA_PORT = "port"
         const val EXTRA_SOURCE = "source"
         const val EXTRA_RATE = "rate"
+
+        /** Whether to ask the PC to clean the voice. On unless the user says otherwise. */
+        const val EXTRA_CLEAN = "clean"
         const val EXTRA_MUTED = "muted"
 
         private const val CHANNEL_ID = "earshot_session"
@@ -80,6 +86,20 @@ class MicService : Service() {
      */
     @Volatile private var muted = false
 
+    /**
+     * Whether the PC is being asked to clean the voice. Read once per frame by the capture thread,
+     * written by whoever taps the switch — the same deal as [muted], and volatile for the same
+     * reason.
+     *
+     * On by default. The phone has no cleaner of its own any more: this is where the noise gets
+     * taken out, so the useful default is the one that does it.
+     */
+    @Volatile private var cleanWanted = true
+
+    /** Whether the PC says it could clean, and whether it says it is. Written by the reply listener. */
+    @Volatile private var pcCanClean = false
+    @Volatile private var pcCleaning = false
+
     private var worker: Thread? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
@@ -102,11 +122,18 @@ class MicService : Service() {
                 if (running) setMuted(intent.getBooleanExtra(EXTRA_MUTED, !muted))
                 return START_NOT_STICKY
             }
+            ACTION_CLEAN -> {
+                // Takes effect on the next frame, because the wish travels on every packet rather
+                // than in a message of its own. Nothing to acknowledge and nothing to resend.
+                cleanWanted = intent.getBooleanExtra(EXTRA_CLEAN, !cleanWanted)
+                return START_NOT_STICKY
+            }
             ACTION_START -> {
                 val host = intent.getStringExtra(EXTRA_HOST) ?: return START_NOT_STICKY
                 val port = intent.getIntExtra(EXTRA_PORT, 47811)
                 val source = intent.getIntExtra(EXTRA_SOURCE, 7) // VOICE_COMMUNICATION
                 val rate = intent.getIntExtra(EXTRA_RATE, Protocol.SAMPLE_RATE)
+                cleanWanted = intent.getBooleanExtra(EXTRA_CLEAN, true)
                 streamHost = host
                 streamPort = port
                 // Every session starts live. A mute carried over from last time would be a silent
@@ -213,7 +240,12 @@ class MicService : Service() {
 
     // ── The stream ───────────────────────────────────────────────────────────
 
-    private fun startStreaming(host: String, port: Int, source: Int, requestedRate: Int) {
+    private fun startStreaming(
+        host: String,
+        port: Int,
+        source: Int,
+        requestedRate: Int,
+    ) {
         if (running) return
         running = true
         acquireWifiLock()
@@ -250,9 +282,17 @@ class MicService : Service() {
                 // stream goes out as raw audio exactly as it always did -- see OpusEncoder.
                 encoder = OpusEncoder.create(rate)
                 val opus = encoder
+
+                // Whole samples for Opus to work on: it wants the frame as numbers rather than
+                // bytes, and the loop must not allocate.
+                //
+                // Noise suppression used to happen here, on this phone, with RNNoise. It was taken
+                // out on 2026-10-26: a keyboard and a mouse click still came through it, because it
+                // is a model built for steady noise. Cleaning is the PC's job now and the phone
+                // only asks for it -- see `cleanWanted` and Protocol.FLAG_CLEAN.
+                val working = if (opus != null) ShortArray(frameSamples) else ShortArray(0)
                 // Allocated here because the loop below must not allocate: the samples as whole
                 // numbers, and a packet with room for the largest Opus frame after its header.
-                val shorts = if (opus != null) ShortArray(frameSamples) else ShortArray(0)
                 val opusPacket = if (opus != null) {
                     ByteArray(Protocol.HEADER_LEN + OpusEncoder.MAX_PACKET_BYTES)
                 } else {
@@ -332,7 +372,10 @@ class MicService : Service() {
                             Protocol.writeHeader(
                                 keepalive,
                                 type = Protocol.TYPE_KEEPALIVE,
-                                flags = 0,
+                                // The wish goes out on a keepalive too: while muted these are the
+                                // only packets that leave, and the PC reads the flags off any of
+                                // them. So the switch works even with the microphone gated.
+                                flags = Protocol.cleanFlags(cleanWanted),
                                 sequence = sequence,
                                 timestamp = timestamp,
                                 ssrc = ssrc,
@@ -349,10 +392,25 @@ class MicService : Service() {
                             Bus.emitStats(
                                 packets, bytes, 0f, rate, source,
                                 answeredMsAgo(now), pcBufferedMsX10 / 10f,
+                                cleanWanted, pcCanClean, pcCleaning,
                             )
                             lastReport = now
                         }
                         continue
+                    }
+
+                    // The frame was read as bytes, because that is what the raw path wants. Opus
+                    // wants whole samples, so unpack when it is on.
+                    if (working.isNotEmpty()) {
+                        var si = 0
+                        var bi = Protocol.HEADER_LEN
+                        while (si < frameSamples) {
+                            working[si] =
+                                ((packet[bi].toInt() and 0xFF) or (packet[bi + 1].toInt() shl 8))
+                                    .toShort()
+                            si++
+                            bi += 2
+                        }
                     }
 
                     // One frame out, compressed if this session can compress. The two paths
@@ -361,23 +419,13 @@ class MicService : Service() {
                     // why a stream can be either without the receiver needing to be told twice.
                     var length = 0
                     if (opus != null) {
-                        // The frame was read as bytes, because that is what the meter below and
-                        // the raw path both want. Opus wants whole samples.
-                        var si = 0
-                        var bi = Protocol.HEADER_LEN
-                        while (si < frameSamples) {
-                            shorts[si] =
-                                ((packet[bi].toInt() and 0xFF) or (packet[bi + 1].toInt() shl 8))
-                                    .toShort()
-                            si++
-                            bi += 2
-                        }
-                        val written = opus.encode(shorts, frameSamples, opusPacket, Protocol.HEADER_LEN)
+                        val written = opus.encode(working, frameSamples, opusPacket, Protocol.HEADER_LEN)
                         if (written > 0) {
                             Protocol.writeHeader(
                                 opusPacket,
                                 type = Protocol.TYPE_OPUS,
-                                flags = if (markNext) Protocol.FLAG_MARK else 0,
+                                flags = Protocol.cleanFlags(cleanWanted) or
+                                    (if (markNext) Protocol.FLAG_MARK else 0),
                                 sequence = sequence,
                                 timestamp = timestamp,
                                 ssrc = ssrc,
@@ -393,7 +441,8 @@ class MicService : Service() {
                         Protocol.writeHeader(
                             packet,
                             type = Protocol.TYPE_PCM_DEBUG,
-                            flags = if (markNext) Protocol.FLAG_MARK else 0,
+                            flags = Protocol.cleanFlags(cleanWanted) or
+                                (if (markNext) Protocol.FLAG_MARK else 0),
                             sequence = sequence,
                             timestamp = timestamp,
                             ssrc = ssrc,
@@ -424,6 +473,7 @@ class MicService : Service() {
                         Bus.emitStats(
                             packets, bytes, peak / 32768f, rate, source,
                             answeredMsAgo(now), pcBufferedMsX10 / 10f,
+                            cleanWanted, pcCanClean, pcCleaning,
                         )
                         peak = 0
                         lastReport = now
@@ -473,6 +523,11 @@ class MicService : Service() {
                     // session's own, so another phone's reply is not read as evidence about ours.
                     val hello = Protocol.parseHello(buf, incoming.length, ssrc) ?: continue
                     pcBufferedMsX10 = hello.bufferedMsX10
+                    // What the PC says about cleaning, kept as it was said. The UI draws these
+                    // rather than drawing what the switch is set to: a switch shows a wish, and
+                    // only the PC can report what is actually happening to the voice.
+                    pcCanClean = hello.canClean
+                    pcCleaning = hello.cleaning
                     lastReplyNs = System.nanoTime()
                 }
             } catch (_: Throwable) {

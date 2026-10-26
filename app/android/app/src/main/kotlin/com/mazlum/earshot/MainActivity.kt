@@ -82,6 +82,18 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
 
+                    "setClean" -> {
+                        startService(
+                            Intent(this, MicService::class.java)
+                                .setAction(MicService.ACTION_CLEAN)
+                                .putExtra(
+                                    MicService.EXTRA_CLEAN,
+                                    call.argument<Boolean>("clean") ?: true,
+                                )
+                        )
+                        result.success(true)
+                    }
+
                     "setMuted" -> {
                         startService(
                             Intent(this, MicService::class.java)
@@ -98,6 +110,10 @@ class MainActivity : FlutterActivity() {
                             val intent = Intent(this, MicService::class.java).apply {
                                 action = MicService.ACTION_START
                                 putExtra(MicService.EXTRA_HOST, call.argument<String>("host"))
+                                putExtra(
+                                    MicService.EXTRA_CLEAN,
+                                    call.argument<Boolean>("clean") ?: true,
+                                )
                                 putExtra(MicService.EXTRA_PORT, call.argument<Int>("port") ?: 47811)
                                 putExtra(MicService.EXTRA_SOURCE, call.argument<Int>("source") ?: 7)
                                 putExtra(MicService.EXTRA_RATE, call.argument<Int>("rate") ?: 48000)
@@ -118,12 +134,17 @@ class MainActivity : FlutterActivity() {
                             mapOf(
                                 "host" to p.getString("host", ""),
                                 "port" to p.getInt("port", 47811),
-                                "source" to p.getInt("source", 7),
                                 "rate" to p.getInt("rate", 48000),
-                                // The pairing code is kept as typed so the field comes back the way
-                                // the user left it; host and port above are what it resolved to.
-                                "code" to p.getString("code", ""),
-                                "manual" to p.getBoolean("manual", false),
+                                // Which of the three choices was picked. Negative means Earshot
+                                // cleans the signal itself -- see MicSource on the Dart side.
+                                "source" to p.getInt("key", p.getInt("source", 7)),
+                                // The PCs this phone has used before, as JSON. Opaque here on
+                                // purpose: known_pcs.dart owns the shape, and a second parser on
+                                // this side would be a second thing to keep in step.
+                                "known" to p.getString("known", ""),
+                                // On unless he has turned it off: the phone has no cleaner of its
+                                // own, so this is the only one there is.
+                                "clean" to p.getBoolean("clean", true),
                             )
                         )
                     }
@@ -134,8 +155,9 @@ class MainActivity : FlutterActivity() {
                             call.argument<Int>("port")?.let { putInt("port", it) }
                             call.argument<Int>("source")?.let { putInt("source", it) }
                             call.argument<Int>("rate")?.let { putInt("rate", it) }
-                            call.argument<String>("code")?.let { putString("code", it) }
-                            call.argument<Boolean>("manual")?.let { putBoolean("manual", it) }
+                            call.argument<Int>("key")?.let { putInt("key", it) }
+                            call.argument<Boolean>("clean")?.let { putBoolean("clean", it) }
+                            call.argument<String>("known")?.let { putString("known", it) }
                         }.apply()
                         result.success(true)
                     }

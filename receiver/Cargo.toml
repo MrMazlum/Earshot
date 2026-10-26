@@ -1,6 +1,6 @@
 [package]
 name = "earshot-receiver"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 # Ubuntu 24.04 ships Rust 1.75 and that is what is actually installed on the dev laptop. Keep this
 # pinned so a newer-only API fails at compile time here, rather than on the owner's machine.
@@ -21,6 +21,24 @@ opusic-sys = "0.7"
 # LAN when a VPN is up (Cloudflare WARP, Tailscale) and we would otherwise tell the phone to
 # connect to an address it cannot reach. Tiny, no transitive deps beyond libc/windows-sys.
 if-addrs = "0.13"
+
+# DeepFilterNet, the heavier cleaner. RNNoise on the phone is a 2017 model built for STEADY noise
+# and it is honest about transients: he can still hear his own keyboard and mouse through it. This
+# one is trained for exactly that, and the difference is the whole reason it is here.
+#
+# Pinned by git REVISION, never by tag: a forge generates a tag's tarball per request and it is not
+# byte-stable (measured — two hashes for one URL), and a cargo git dependency resolves a rev
+# reproducibly where a tag can be moved.
+#
+# `tract` is a pure-Rust ONNX runtime, so this adds no C++ and nothing to the Windows build beyond
+# more Rust. `default-features = false` drops the audio-file readers and the dataset machinery,
+# which are for training and have no business in a receiver.
+#
+# MIT/Apache-2.0, code and weights both, which sits fine beside this GPL-3.0 program.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "978576aa8400552a4ce9730838c635aa30db5e61", default-features = false, features = ["tract", "default-model"] }
+# Only for the two array views DeepFilterNet's `process` takes. Pinned to the same major as the one
+# `deep_filter` resolves, or the types are different types with the same name.
+ndarray = "0.15"
 
 # The tray icon, Linux only. `ksni` speaks StatusNotifierItem over D-Bus directly, in Rust — which
 # is why it is preferred over `tray-icon`/`libappindicator`: those need
@@ -80,3 +98,17 @@ path = "src/bin/testsend.rs"
 name = "earshot-tray"
 path = "src/bin/tray.rs"
 required-features = ["tray"]
+
+# Two development tools. They are not part of what a user downloads: the release workflow names the
+# binaries it ships, and these are not among them.
+#
+# `earshot-record` captures the phone's stream to a wav without playing it, which is the only way
+# to test audio on a machine with no sound card. `earshot-clean` runs one such recording through
+# every cleaner so they can be compared by ear instead of by claim.
+[[bin]]
+name = "earshot-record"
+path = "src/bin/record.rs"
+
+[[bin]]
+name = "earshot-clean"
+path = "src/bin/clean.rs"

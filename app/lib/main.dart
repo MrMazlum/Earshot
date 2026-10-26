@@ -4,8 +4,10 @@
 //
 // The PC is identified by its address, and in the ordinary case nobody types one: the phone knocks
 // on every door on its own subnet and lists whoever answers, because the receiver already replies
-// to any packet it understands. discover.dart has the mechanism. The address field is the fallback
-// for a PC the sweep cannot reach — another subnet, a VPN, an unusual port.
+// to any packet it understands. discover.dart has the mechanism. Whatever has answered before is
+// remembered (known_pcs.dart), so a PC that is switched off, or on a network the sweep cannot
+// reach, is still one tap away. One box takes a typed entry in any of its three forms — see
+// address_entry.dart — and there is no longer a separate port field or a switch between kinds.
 //
 // The mic-source picker is not a settings nicety: it is the one experiment this app exists to run.
 // Only the two sources that differ by Android specification are selectable — see MicSource for why
@@ -20,11 +22,26 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'address_entry.dart';
+import 'collapsed_view.dart';
 import 'discover.dart';
-import 'pc_picker.dart';
+import 'known_pcs.dart';
+import 'link_state.dart';
 import 'reachability.dart';
+import 'setup_panel.dart';
+import 'theme.dart';
 
 void main() => runApp(const EarshotApp());
+
+/// What the app calls itself at the foot of the screen.
+///
+/// ⚠️ Kept in step with `pubspec.yaml` by `test/version_test.dart`, because a version string that
+/// has to be edited in two places is a version string that is wrong in one of them.
+const appVersion = '0.2.0';
+
+/// What the rename dialog returns when its Forget button was the one pressed. A name nobody can
+/// type, because every other string that comes back is a name.
+const _forgetSentinel = '\u0000forget';
 
 const _control = MethodChannel('earshot/control');
 const _events = EventChannel('earshot/events');
@@ -34,20 +51,17 @@ const _events = EventChannel('earshot/events');
 /// "Streaming" and "connected" were the same word in this app once, and they are not the same
 /// thing: the phone can send perfectly well and be heard by nobody. Only [connected] means the PC
 /// answered — see `Protocol.TYPE_HELLO` and protocol/README.md.
-enum LinkState { idle, connecting, connected, noAnswer }
+// LinkState moved to link_state.dart so the screen can be built without importing this file.
 
 /// The PC replies once a second, so three seconds of silence is two missed replies and then some.
 /// It is also how long a new session waits before it stops saying "connecting" and says the truth.
 const _answerTimeout = Duration(seconds: 3);
 
-/// Matches the icon in tools/icon/make_icons.py, so the app and its launcher icon agree.
-const _seed = Color(0xFF3DDC97);
-const _backdrop = Color(0xFF0B1310);
 
 /// Android's MediaRecorder.AudioSource constants.
 ///
-/// These are not a cosmetic toggle — the number really is handed to `AudioRecord`, and the first
-/// two behave differently on every Android device by specification: VOICE_COMMUNICATION runs the
+/// These are not a cosmetic toggle — the number really is handed to `AudioRecord`, and the two
+/// behave differently on every Android device by specification: VOICE_COMMUNICATION runs the
 /// platform's echo and noise cancellation, MIC does not.
 ///
 /// The other three are switched off, and the reason is honesty rather than laziness. Whether a
@@ -57,85 +71,122 @@ const _backdrop = Color(0xFF0B1310);
 /// recording is worse than offering two that are definitely not. They come back when there is a
 /// measurement on a real phone to justify them.
 class MicSource {
+  /// Android's `MediaRecorder.AudioSource` value this choice captures with.
   final int id;
+
   final String name;
   final String blurb;
 
-  /// False for the ones parked until they can be told apart on a real phone.
-  final bool available;
+  const MicSource(this.id, this.name, this.blurb);
 
-  const MicSource(this.id, this.name, this.blurb, {this.available = true});
-
+  /// Two choices, and they are two because they sound different — not because Android has two
+  /// microphones. Both are Android's own, and they differ by its specification: the voice-call
+  /// chain runs the phone's echo and noise cancellation, the plain microphone does not.
+  ///
+  /// ⚠️ There was a third — the plain microphone cleaned on the phone by RNNoise. It was removed
+  /// on 2026-10-26, the day after it was first heard: a keyboard and mouse clicks still came
+  /// through it, because RNNoise is a model built for steady noise. Cleaning now happens on the
+  /// PC, which has the processor for a model that handles transients, and the phone asks for it
+  /// with a flag instead of doing it. See protocol/README.md.
   static const all = <MicSource>[
     MicSource(7, 'Voice call',
-        'Echo and noise cancellation, like a phone call. May force 16 kHz.'),
-    MicSource(1, 'Plain mic', 'Barely processed. Room and fan noise come through.'),
-    MicSource(6, 'Speech', 'Often the plain mic under another name.',
-        available: false),
-    MicSource(9, 'Unprocessed', 'No processing, where the phone supports it.',
-        available: false),
-    MicSource(5, 'Camcorder', 'The video mic array. Often the plain mic.',
-        available: false),
+        'The phone call chain: its own echo and noise cancellation. May force 16 kHz.'),
+    MicSource(1, 'Plain mic',
+        'Barely processed, full band. The PC takes the noise out.'),
   ];
 
-  static MicSource byId(int id) =>
-      all.firstWhere((s) => s.id == id, orElse: () => all.first);
+  /// How a choice is stored and restored. The Android source number is enough on its own now that
+  /// no two choices share one.
+  int get key => id;
 
-  /// Falls back to the default when a stored choice is no longer selectable.
-  static int usable(int id) =>
-      all.any((s) => s.id == id && s.available) ? id : all.first.id;
+  static MicSource byKey(int key) =>
+      all.firstWhere((s) => s.key == key, orElse: () => all.first);
+
+  /// Falls back to the default when a stored choice no longer exists.
+  ///
+  /// ⚠️ A phone that stored the removed third choice has `-1` saved, which matches nothing and
+  /// lands on the first entry. That is the right answer and it is why this is not an assert: an
+  /// app that crashed on its own old setting would be worse than one that forgets it.
+  static MicSource usable(int key, int rate) => byKey(key);
 }
 
 class EarshotApp extends StatelessWidget {
-  const EarshotApp({super.key});
+  /// The look. A parameter rather than a constant so the three finished palettes can be rendered
+  /// side by side for a decision, and so switching the app's look later is one line.
+  final Palette palette;
+
+  const EarshotApp({super.key, this.palette = defaultPalette});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: _seed,
-      brightness: Brightness.dark,
-    );
     return MaterialApp(
       title: 'Earshot',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: scheme,
-        // Named rather than left to the platform default, which is this same font on every Android
-        // phone. Saying it out loud is what lets test/gen_screens.dart register the real file and
-        // photograph readable words instead of a page of black boxes.
-        fontFamily: 'Roboto',
-        scaffoldBackgroundColor: _backdrop,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          isDense: true,
-        ),
-      ),
-      home: const SessionPage(),
+      // One palette, named, in theme.dart — rather than a seed colour here and five hard-coded
+      // greens scattered through the widgets. Swapping the look is swapping this constant.
+      theme: palette.theme,
+      home: SessionPage(palette: palette),
     );
   }
 }
 
 class SessionPage extends StatefulWidget {
-  const SessionPage({super.key});
+  final Palette palette;
+  const SessionPage({super.key, this.palette = defaultPalette});
 
   @override
   State<SessionPage> createState() => _SessionPageState();
 }
 
 class _SessionPageState extends State<SessionPage> {
-  final _host = TextEditingController();
-  final _port = TextEditingController(text: '$defaultPort');
+  /// Where Start will send audio. Set by tapping a PC or by typing one in, and never derived from
+  /// a text field halfway through being edited — a half-typed address is not a destination.
+  Destination? _target;
 
   /// PCs that answered the last sweep, fastest first.
   List<Found> _found = const [];
 
-  /// True while a sweep is in flight, so the card can say so rather than looking empty.
+  /// The ones that have answered before. Loaded from preferences, saved whenever it changes.
+  KnownPcs _known = KnownPcs.empty;
+
+  /// True while a sweep is in flight, so the row can say so rather than looking empty.
   bool _searching = false;
 
   StreamSubscription<Found>? _sweep;
 
+  /// The one box. Takes an address, an address:port, or the nine-digit code — see
+  /// address_entry.dart. There is no second field and no switch: his instruction, 2026-10-26.
+  final _entry = TextEditingController();
+
+  /// What is wrong with what is in the box, in the words shown under it. Null while it is empty
+  /// or usable.
+  String? _entryMessage;
+
+  /// True while the "type it in" line is open. Closed is the normal state: the phone finds the
+  /// PC, and a field nobody needs should not be on screen.
+  bool _manualOpen = false;
+
+  /// True while the audio card is showing all three choices rather than only the active one.
+  ///
+  /// His complaint, 2026-10-26: *"Audio part is consuming too much space."* Shut, the card is one
+  /// line that says what the microphone is doing; open, it is the three choices and the rate.
+  bool _audioOpen = false;
+
+  /// True while the full screen is being shown on top of a confirmed session, because the user
+  /// asked for it. Reset the moment the session ends, so the next one starts collapsed again.
+  bool _expanded = false;
+
+  /// The chosen microphone, as [MicSource.key].
   int _source = 7;
+
+  /// Whether the PC is being asked to clean the voice. On by default: the phone has no cleaner of
+  /// its own, so this is the only one there is.
+  bool _clean = true;
+
+  /// What the PC says, which is not the same thing as what [_clean] asks for. A receiver too old
+  /// to clean answers no to both, and the panel must show that instead of the wish.
+  bool _pcCanClean = false;
+  bool _pcCleaning = false;
   int _rate = 48000;
 
   bool _running = false;
@@ -178,17 +229,12 @@ class _SessionPageState extends State<SessionPage> {
   @override
   void dispose() {
     _sweep?.cancel();
-    _host.dispose();
-    _port.dispose();
+    _entry.dispose();
     super.dispose();
   }
 
-  /// Where Start would send audio right now, or null if the field is not usable yet.
-  Destination? get _target {
-    final host = _host.text.trim();
-    if (host.isEmpty) return null;
-    return Destination(host, int.tryParse(_port.text.trim()) ?? defaultPort);
-  }
+  /// The list the screen draws: everything answering now, then everything remembered that is not.
+  List<PcRow> get _rows => mergePcs(_found, _known);
 
   /// What this phone can work out about reaching the PC before a packet is sent.
   Reachability get _reach => reachability(_net, _target);
@@ -223,11 +269,16 @@ class _SessionPageState extends State<SessionPage> {
       if (!mounted || p == null) return;
       setState(() {
         if (net != null) _net = NetworkState.fromMap(net);
-        _host.text = (p['host'] as String?) ?? '';
-        _port.text = '${p['port'] ?? defaultPort}';
+        _known = KnownPcs.decode(p['known'] as String?);
+        final host = (p['host'] as String?) ?? '';
+        _target = host.isEmpty
+            ? null
+            : Destination(host, (p['port'] as int?) ?? defaultPort);
+        if (_target != null) _entry.text = writeDestination(_target!);
         // A source that has since been parked would otherwise stay selected and invisible.
-        _source = MicSource.usable((p['source'] as int?) ?? 7);
         _rate = (p['rate'] as int?) ?? 48000;
+        _source = MicSource.usable((p['source'] as int?) ?? 7, _rate).key;
+        _clean = (p['clean'] as bool?) ?? true;
         _running = running;
         _muted = running && muted;
       });
@@ -256,22 +307,24 @@ class _SessionPageState extends State<SessionPage> {
       _searching = true;
       _found = const [];
     });
-    final port = int.tryParse(_port.text.trim()) ?? defaultPort;
     _sweep = findReceivers(
       // The local network, not the active one: with a VPN up those differ, and the PC is only
       // ever on the local one.
       selfIp: _net.localIp,
       prefix: _net.localPrefix,
-      port: port,
+      // Always the usual port: a sweep asks 254 machines the same question, and a machine told to
+      // listen somewhere unusual is exactly the case the typed box exists for.
+      port: defaultPort,
     ).listen(
       (found) {
         if (!mounted) return;
         setState(() {
           _found = [..._found, found];
-          // One PC, nothing to choose: pick it. Two or more and the choice is the user's, unless
-          // one of them is the address already in the field.
-          if (_found.length == 1 && _host.text.trim().isEmpty) {
-            _host.text = found.destination.host;
+          // One PC and nothing already chosen: choose it. A second one makes it a decision, and
+          // a decision is the user's.
+          if (_found.length == 1 && _target == null) {
+            _target = found.destination;
+            _entry.text = writeDestination(found.destination);
           }
         });
       },
@@ -279,14 +332,21 @@ class _SessionPageState extends State<SessionPage> {
         if (!mounted) return;
         setState(() {
           _searching = false;
-          // Nothing answered and nothing typed: offer the subnet, so what is left to type is one
-          // number rather than four.
-          if (_found.isEmpty && _host.text.trim().isEmpty) {
+          // Nothing answered, nothing chosen, nothing remembered: offer this subnet, so what is
+          // left to type is one number rather than four.
+          if (_found.isEmpty && _target == null && _known.isEmpty) {
             final own = _net.localIp;
             if (own != null && own.split('.').length == 4) {
               final parts = own.split('.');
-              _host.text = '${parts[0]}.${parts[1]}.${parts[2]}.';
+              _entry.text = '${parts[0]}.${parts[1]}.${parts[2]}.';
+              _manualOpen = true;
             }
+          }
+          // Everything remembered that did not answer stays on the list, so a PC that is simply
+          // switched off is still one tap away.
+          if (_found.isEmpty && _target == null && _known.all.isNotEmpty) {
+            _target = _known.all.first.destination;
+            _entry.text = writeDestination(_target!);
           }
         });
       },
@@ -294,13 +354,112 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
-  /// Chooses one of the PCs that answered.
+  /// Chooses a PC — one that answered, or one that is remembered.
   void _pick(Destination destination) {
     setState(() {
-      _host.text = destination.host;
-      _port.text = '${destination.port}';
+      _target = destination;
+      _entry.text = writeDestination(destination);
+      _entryMessage = null;
       _error = null;
     });
+  }
+
+  /// Reads the one box on every keystroke. An empty box clears the choice rather than keeping a
+  /// destination nobody can see any more.
+  void _onEntryChanged() {
+    final read = readDestination(_entry.text);
+    setState(() {
+      _entryMessage = read?.message;
+      if (read != null && read.isOk) {
+        _target = read.destination;
+        _error = null;
+      } else if (read == null) {
+        _target = null;
+      }
+    });
+  }
+
+  /// Gives a PC a name. Two addresses on one dual-boot machine are unreadable otherwise, which is
+  /// the report this came from.
+  Future<void> _rename(PcRow row) async {
+    final field = TextEditingController(text: row.known ? row.label : '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: widget.palette.surface,
+        title: Text(
+          'Call this PC',
+          style: TextStyle(
+              fontFamily: mono, color: widget.palette.ink, fontSize: 18),
+        ),
+        content: TextField(
+          controller: field,
+          autofocus: true,
+          maxLength: 24,
+          style: TextStyle(fontFamily: mono, color: widget.palette.ink),
+          decoration: InputDecoration(
+            hintText: row.destination.host,
+            counterText: '',
+            hintStyle: TextStyle(
+                fontFamily: mono, color: widget.palette.inkDim),
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value),
+        ),
+        actions: [
+          // Forgetting has to be reachable from the same place as naming. A list that can only
+          // grow collects every machine that ever answered once — a friend's PC, a test, a
+          // receiver somebody ran for five minutes — and none of them can be got rid of.
+          if (row.known)
+            TextButton(
+              onPressed: () => Navigator.pop(context, _forgetSentinel),
+              child: Text(
+                'Forget',
+                style: TextStyle(color: widget.palette.noAnswer.base),
+              ),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, field.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+    if (name == null || !mounted) return;
+
+    if (name == _forgetSentinel) {
+      setState(() {
+        _known = _known.forget(row.destination);
+        // The chosen PC cannot be one that is no longer on the list.
+        if (_target == row.destination) {
+          _target = null;
+          _entry.clear();
+          _entryMessage = null;
+        }
+      });
+      _saveKnown();
+      return;
+    }
+    // A name can be given to a PC that has only ever answered a sweep, so it is remembered here
+    // rather than only when a session confirms.
+    setState(() {
+      _known = _known
+          .remember(row.destination, now: DateTime.now().millisecondsSinceEpoch)
+          .rename(row.destination, name);
+    });
+    _saveKnown();
+  }
+
+  Future<void> _saveKnown() async {
+    try {
+      await _control.invokeMethod('setPrefs', {'known': _known.encode()});
+    } on PlatformException {
+      // A list that could not be written back is not worth failing a session over.
+    }
   }
 
   void _onEvent(dynamic event) {
@@ -317,6 +476,8 @@ class _SessionPageState extends State<SessionPage> {
           // A new session has heard nothing yet, whatever the last one heard.
           _answeredMsAgo = -1;
           _pcBufferedMs = 0;
+          _pcCanClean = false;
+          _pcCleaning = false;
           _startedAt = DateTime.now();
           break;
         case 'network':
@@ -333,6 +494,20 @@ class _SessionPageState extends State<SessionPage> {
           _actualRate = (event['rate'] as int?) ?? _actualRate;
           _answeredMsAgo = (event['answeredMsAgo'] as num?)?.toInt() ?? -1;
           _pcBufferedMs = (event['pcBufferedMs'] as num?)?.toDouble() ?? 0;
+          // Read from the PC's own replies, never inferred from the switch.
+          _pcCanClean = (event['pcCanClean'] as bool?) ?? false;
+          _pcCleaning = (event['pcCleaning'] as bool?) ?? false;
+          // A PC earns its place on the remembered list by ANSWERING — its own reply, not the
+          // fact that somebody typed an address. A list full of machines that were never there
+          // is worse than no list.
+          final here = _target;
+          if (_answeredMsAgo >= 0 && here != null && _known.find(here) == null) {
+            _known = _known.remember(
+              here,
+              now: DateTime.now().millisecondsSinceEpoch,
+            );
+            _saveKnown();
+          }
           break;
         case 'error':
           _error = event['message'] as String?;
@@ -345,6 +520,8 @@ class _SessionPageState extends State<SessionPage> {
           _level = 0;
           _answeredMsAgo = -1;
           _startedAt = null;
+          // The next session starts collapsed again. Asking for detail was about *this* session.
+          _expanded = false;
           break;
       }
     });
@@ -361,9 +538,9 @@ class _SessionPageState extends State<SessionPage> {
 
     final target = _target;
     if (target == null) {
-      setState(() => _error = _found.isEmpty
-          ? "Pick your PC, or type its address. Nothing on this network has "
-              "answered yet — check Earshot is running over there."
+      setState(() => _error = _rows.isEmpty
+          ? 'Pick your PC, or type its address. Nothing on this network has '
+              'answered yet — check Earshot is running over there.'
           : 'Pick your PC from the list.');
       return;
     }
@@ -397,11 +574,19 @@ class _SessionPageState extends State<SessionPage> {
     }
     if (_permissionBlocked) setState(() => _permissionBlocked = false);
 
+    final chosen = MicSource.usable(_source, _rate);
     final args = {
       'host': target.host,
       'port': target.port,
-      'source': _source,
+      // The service only ever deals in an Android source; the key is this screen's business, and
+      // is what gets remembered.
+      'source': chosen.id,
       'rate': _rate,
+      // The wish the PC will be asked for, on every packet, for the whole session -- and
+      // changeable while it runs without restarting anything.
+      'clean': _clean,
+      'key': chosen.key,
+      'known': _known.encode(),
     };
     await _control.invokeMethod('setPrefs', args);
 
@@ -433,6 +618,20 @@ class _SessionPageState extends State<SessionPage> {
   Future<void> _toggleMute() async {
     if (!_running) return;
     await _control.invokeMethod('setMuted', {'muted': !_muted});
+  }
+
+  /// Turns the PC's cleaning on or off.
+  ///
+  /// Unlike the microphone and the rate, this works **while a session runs**: the wish travels on
+  /// every packet, so there is nothing to restart and nothing to acknowledge. The switch moves at
+  /// once because it is a wish; whether it took effect is reported separately by the PC, and that
+  /// is what the panel draws underneath.
+  Future<void> _setClean(bool value) async {
+    setState(() => _clean = value);
+    if (_running) {
+      await _control.invokeMethod('setClean', {'clean': value});
+    }
+    await _control.invokeMethod('setPrefs', {'clean': value});
   }
 
   /// The explanations that used to sit permanently on the main screen. They are worth having and
@@ -468,11 +667,9 @@ class _SessionPageState extends State<SessionPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(
-                          s.available ? Icons.check_circle_outline : Icons.lock_outline,
+                          Icons.check_circle_outline,
                           size: 17,
-                          color: s.available
-                              ? theme.colorScheme.primary
-                              : theme.hintColor,
+                          color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -514,729 +711,108 @@ class _SessionPageState extends State<SessionPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final kbps =
         _packets > 0 ? (_bytes * 8 / 1000 / (_packets * 0.02)).round() : 0;
 
-    return Scaffold(
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            _Header(link: _link, muted: _muted),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                children: [
-                  _LevelMeter(
-                    level: _level,
-                    live: _running,
-                    muted: _muted,
-                    // The numbers replace the caption rather than joining it: while streaming they
-                    // are the thing worth reading, and telling someone to speak is not.
-                    metrics: _running && !_muted
-                        ? '${(_actualRate / 1000).round()} kHz  ·  '
-                            '$kbps kbps  ·  $_packets pkt'
-                        : null,
-                  ),
-                  const SizedBox(height: 14),
-                  // Above "Your PC" on purpose: it is the question asked first, and the one that
-                  // used to have no answer anywhere on this screen.
-                  _NetworkCard(
-                    reach: _reach,
-                    link: _link,
-                    answeredMsAgo: _answeredMsAgo,
-                    pcBufferedMs: _pcBufferedMs,
-                    onOpenWifi: () => _control.invokeMethod('openWifiSettings'),
-                  ),
-                  const SizedBox(height: 14),
-                  _Card(
-                    title: 'Your PC',
-                    action: _running
-                        ? null
-                        : _CardAction(
-                            icon: Icons.refresh,
-                            label: _searching ? 'Looking' : 'Look again',
-                            onTap: _searching ? null : _search,
-                          ),
-                    child: PcPicker(
-                      found: _found,
-                      searching: _searching,
-                      selected: _target,
-                      enabled: !_running,
-                      host: _host,
-                      port: _port,
-                      onPick: _pick,
-                      onChanged: () => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _Card(
-                    title: 'Audio',
-                    // Why three of the five are locked is a real answer, but it is a paragraph, and
-                    // a paragraph does not belong on the screen someone uses every day.
-                    action: _CardAction(
-                      icon: Icons.info_outline,
-                      label: 'About',
-                      onTap: () => _showMicInfo(context),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: MicSource.all
-                              .map((s) => ChoiceChip(
-                                    label: Text(s.name),
-                                    avatar: s.available
-                                        ? null
-                                        : const Icon(Icons.lock_outline,
-                                            size: 15),
-                                    selected: s.available && _source == s.id,
-                                    // A locked chip stays visible and tappable so its blurb can
-                                    // explain itself; it just cannot be chosen.
-                                    onSelected: _running
-                                        ? null
-                                        : (_) => setState(() {
-                                              if (s.available) _source = s.id;
-                                            }),
-                                    showCheckmark: s.available,
-                                  ))
-                              .toList(),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          MicSource.byId(_source).blurb,
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: theme.hintColor),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 14),
-                          child: Divider(height: 1),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text('Sample rate',
-                                  style: theme.textTheme.bodyMedium),
-                            ),
-                            SegmentedButton<int>(
-                              segments: const [
-                                ButtonSegment(
-                                    value: 48000, label: Text('48 kHz')),
-                                ButtonSegment(
-                                    value: 16000, label: Text('16 kHz')),
-                              ],
-                              selected: {_rate},
-                              showSelectedIcon: false,
-                              style: const ButtonStyle(
-                                visualDensity: VisualDensity.compact,
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              onSelectionChanged: _running
-                                  ? null
-                                  : (v) => setState(() => _rate = v.first),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+    // The confirmed session gets the screen that is almost nothing. Confirmed is the operative
+    // word: this is the PC's own reply, not "we pressed Start" — see collapsed_view.dart for why
+    // that distinction is the whole safety of it.
+    if (_link == LinkState.connected && !_expanded) {
+      return Scaffold(
+        // Crossfaded rather than swapped: going quiet is the app agreeing it has nothing left to
+        // say, and a hard cut looks like a crash. 340 ms, which is long enough to read as a
+        // transition and short enough that nobody waits for it.
+        body: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 340),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween(begin: 1.04, end: 1.0).animate(animation),
+              child: child,
             ),
-          ],
+          ),
+          child: CollapsedView(
+            key: ValueKey(_muted ? 'muted' : 'connected'),
+            palette: widget.palette,
+            state: _muted ? 'muted' : 'connected',
+            level: _level,
+            elapsed: _startedAt == null
+                ? Duration.zero
+                : DateTime.now().difference(_startedAt!),
+            onExpand: () => setState(() => _expanded = true),
+            onToggleMute: _toggleMute,
+          ),
         ),
-      ),
-      // Pinned, and inside a SafeArea of its own. This is the fix for the button that used to sit
-      // underneath Android's navigation bar.
-      bottomNavigationBar: _ActionBar(
-        running: _running,
-        muted: _muted,
-        error: _error,
-        // Greyed rather than allowed-and-then-refused: the card directly above says why, in full,
-        // and a button that can be pressed into a session that cannot work is what got us here.
-        canStart: !_reach.blocks,
-        onPressed: _toggle,
-        onMute: _toggleMute,
-        onOpenSettings: _permissionBlocked
-            ? () => _control.invokeMethod('openAppSettings')
-            : null,
-      ),
-    );
-  }
-}
-
-/// Amber, for the one state that is neither running nor stopped. Deliberately not the primary
-/// colour: muted must never be mistakable for live at a glance.
-const _mutedColour = Colors.amber;
-
-/// The network card: where this phone is, whether the PC can be reached from there, and — once
-/// streaming — whether the PC is actually answering.
-///
-/// It sits above everything else because it is the first question, and because for one whole
-/// session it was a question this screen could not answer at all.
-class _NetworkCard extends StatelessWidget {
-  final Reachability reach;
-  final LinkState link;
-  final int answeredMsAgo;
-  final double pcBufferedMs;
-  final VoidCallback onOpenWifi;
-
-  const _NetworkCard({
-    required this.reach,
-    required this.link,
-    required this.answeredMsAgo,
-    required this.pcBufferedMs,
-    required this.onOpenWifi,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if (reach.verdict == Reach.unknown && reach.headline.isEmpty) {
-      return const SizedBox.shrink();
+      );
     }
 
-    final (icon, colour) = switch (reach.verdict) {
-      Reach.blocked => (Icons.error_outline, theme.colorScheme.error),
-      Reach.warn => (Icons.warning_amber_rounded, _mutedColour),
-      Reach.ok => (Icons.check_circle_outline, theme.colorScheme.primary),
-      Reach.unknown => (Icons.wifi_rounded, theme.hintColor),
-    };
-
-    return _Card(
-      title: 'Network',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, size: 17, color: colour),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  reach.headline,
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: colour, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-          if (reach.detail != null) ...[
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.only(left: 27),
-              child: Text(
-                reach.detail!,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
-              ),
-            ),
-          ],
-          if (reach.offerWifi) ...[
-            const SizedBox(height: 4),
-            Padding(
-              padding: const EdgeInsets.only(left: 19),
-              child: TextButton.icon(
-                onPressed: onOpenWifi,
-                icon: const Icon(Icons.wifi_rounded, size: 18),
-                label: const Text('Open Wi-Fi settings'),
-                style: TextButton.styleFrom(
-                  foregroundColor: colour,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-            ),
-          ],
-          // The second half of the answer, and the only one that is evidence rather than
-          // reasoning: what the PC itself has said, and how long ago it said it.
-          if (link != LinkState.idle) ...[
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Divider(height: 1),
-            ),
-            _PcReply(
-              link: link,
-              answeredMsAgo: answeredMsAgo,
-              pcBufferedMs: pcBufferedMs,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// What the PC is saying back, in a sentence rather than a number.
-class _PcReply extends StatelessWidget {
-  final LinkState link;
-  final int answeredMsAgo;
-  final double pcBufferedMs;
-
-  const _PcReply({
-    required this.link,
-    required this.answeredMsAgo,
-    required this.pcBufferedMs,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    final (icon, colour, headline, detail) = switch (link) {
-      LinkState.connected => (
-          Icons.check_circle_outline,
-          theme.colorScheme.primary,
-          'Your PC is hearing this',
-          'It answered ${_ago(answeredMsAgo)} ago'
-              '${pcBufferedMs > 0 ? ' · holding ${pcBufferedMs.toStringAsFixed(0)} ms' : ''}.',
-        ),
-      LinkState.connecting => (
-          Icons.hourglass_empty_rounded,
-          theme.hintColor,
-          'Waiting for your PC to answer',
-          null,
-        ),
-      LinkState.noAnswer => (
-          Icons.error_outline,
-          theme.colorScheme.error,
-          'Your PC is not answering',
-          'The microphone is being sent, but nothing is coming back. Check that Earshot is '
-              'running on the PC, and that this is the right address. An Earshot on the PC '
-              'older than this app never answers — the sound still works, but this cannot tell.',
-        ),
-      LinkState.idle => (Icons.circle_outlined, theme.hintColor, '', null),
-    };
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 17, color: colour),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                headline,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: colour, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-        if (detail != null) ...[
-          const SizedBox(height: 6),
-          Padding(
-            padding: const EdgeInsets.only(left: 27),
-            child: Text(
-              detail,
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
-            ),
-          ),
-        ],
+    final active = MicSource.usable(_source, _rate);
+    return SetupPanel(
+      palette: widget.palette,
+      link: _link,
+      running: _running,
+      muted: _muted,
+      reach: _reach,
+      onOpenWifi: () => _control.invokeMethod('openWifiSettings'),
+      rows: _rows,
+      target: _target,
+      searching: _searching,
+      onSearch: _search,
+      onPick: _pick,
+      onRename: _rename,
+      manualOpen: _manualOpen,
+      onToggleManual: () => setState(() => _manualOpen = !_manualOpen),
+      entry: _entry,
+      entryMessage: _entryMessage,
+      onEntryChanged: _onEntryChanged,
+      micName: active.name,
+      micBlurb: MicSource.byKey(_source).blurb,
+      source: _source,
+      rate: _rate,
+      audioOpen: _audioOpen,
+      onToggleAudio: () => setState(() => _audioOpen = !_audioOpen),
+      onSource: (key) => setState(() => _source = key),
+      onRate: (rate) => setState(() {
+        _rate = rate;
+        _source = MicSource.usable(_source, rate).key;
+      }),
+      // Both sources are Android's own and both work at either rate, so nothing is ever greyed
+      // out here now. Kept because the panel asks, and a lie would be shorter.
+      sourceEnabled: (key) => true,
+      clean: _clean,
+      // ⚠️ The PC decides whether cleaning is happening, not this switch. Cleaning at 48 kHz only
+      // is the receiver's rule, so at 16 kHz the PC answers "not cleaning" and the panel says so
+      // rather than this screen second-guessing it.
+      pcCanClean: _pcCanClean,
+      pcCleaning: _pcCleaning,
+      onClean: _setClean,
+      sources: [
+        for (final s in MicSource.all) (key: s.key, name: s.name),
       ],
-    );
-  }
-
-  /// Sub-second ages read as "a moment": nobody needs 240 ms, and a number that fast only draws
-  /// the eye to a figure that is changing five times a second.
-  static String _ago(int ms) {
-    if (ms < 0) return 'never';
-    if (ms < 1000) return 'a moment';
-    return '${(ms / 1000).toStringAsFixed(0)} s';
-  }
-}
-
-class _Header extends StatelessWidget {
-  final LinkState link;
-  final bool muted;
-  const _Header({required this.link, required this.muted});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(
-        children: [
-          Image.asset('assets/icon.png', width: 34, height: 34),
-          const SizedBox(width: 10),
-          Text(
-            'Earshot',
-            style: theme.textTheme.titleLarge
-                ?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const Spacer(),
-          _LiveBadge(link: link, muted: muted),
-        ],
-      ),
+      onAbout: () => _showMicInfo(context),
+      level: _level,
+      actualRate: _actualRate,
+      kbps: kbps,
+      packets: _packets,
+      answeredMsAgo: _answeredMsAgo,
+      pcBufferedMs: _pcBufferedMs,
+      // Greyed rather than allowed-and-then-refused: the network row directly above says why, in
+      // full, and a button that can be pressed into a session that cannot work is what got us here.
+      canStart: _target != null && !_reach.blocks,
+      error: _error,
+      onOpenSettings: _permissionBlocked
+          ? () => _control.invokeMethod('openAppSettings')
+          : null,
+      onToggle: _toggle,
+      onMute: _toggleMute,
+      // The way back to the quiet screen. Only offered when there is one to go back to — a
+      // confirmed session — because collapsing anything else would hide a fault.
+      onCollapse: _link == LinkState.connected && _expanded
+          ? () => setState(() => _expanded = false)
+          : null,
+      version: 'earshot $appVersion',
     );
   }
 }
-
-/// The word at the top of the screen.
-///
-/// It used to read LIVE the moment the microphone opened, which was true about the phone and told
-/// the user nothing about the PC — and on a session that reached nobody it was the most reassuring
-/// thing on the screen. Now it names the link: the microphone being open is the *least* of it.
-class _LiveBadge extends StatelessWidget {
-  final LinkState link;
-  final bool muted;
-  const _LiveBadge({required this.link, required this.muted});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // Mute wins the badge while connected: it is the state most likely to be misread across a
-    // room, and its cost — talking to nobody — is the one this badge exists to prevent.
-    final (colour, label) = switch ((link, muted)) {
-      (LinkState.idle, _) => (theme.disabledColor, 'IDLE'),
-      (LinkState.noAnswer, _) => (theme.colorScheme.error, 'NO ANSWER'),
-      (LinkState.connecting, _) => (theme.hintColor, 'CONNECTING'),
-      (LinkState.connected, true) => (_mutedColour, 'MUTED'),
-      (LinkState.connected, false) => (theme.colorScheme.primary, 'CONNECTED'),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: colour.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: colour, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 7),
-          Text(
-            label,
-            style: TextStyle(
-              color: colour,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.1,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A segmented bar, because a single sliding bar makes it hard to tell a quiet signal from none at
-/// all — and telling those apart is exactly what someone checks this screen for.
-class _LevelMeter extends StatelessWidget {
-  final double level;
-  final bool live;
-  final bool muted;
-
-  /// Shown instead of the caption while streaming. Null when idle or muted.
-  final String? metrics;
-  const _LevelMeter({
-    required this.level,
-    required this.live,
-    required this.muted,
-    this.metrics,
-  });
-
-  static const _segments = 26;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // Muted forces the meter flat rather than relying on the level happening to be zero. A meter
-    // that still moved while muted would make a mute bug look like normal operation.
-    final lit = muted ? 0 : (level.clamp(0.0, 1.0) * _segments).round();
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: 42,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: List.generate(_segments, (i) {
-                final on = live && i < lit;
-                // Taller towards the right, so the meter has a direction even at rest.
-                final height = 12.0 + (i / (_segments - 1)) * 30.0;
-                return Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 90),
-                      height: height,
-                      decoration: BoxDecoration(
-                        color: on
-                            ? _colourFor(i, theme)
-                            : theme.colorScheme.onSurface
-                                .withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            metrics ?? (muted ? 'Muted — nothing is being sent' : 'Not streaming'),
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: muted ? _mutedColour : theme.hintColor,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _colourFor(int i, ThemeData theme) {
-    final t = i / (_segments - 1);
-    if (t > 0.92) return theme.colorScheme.error;
-    if (t > 0.78) return Colors.amber;
-    return theme.colorScheme.primary;
-  }
-}
-
-/// A secondary control in a card header: the escape hatch, the explanation. Small on purpose - it
-/// is there when looked for and quiet when not.
-class _CardAction {
-  final String label;
-  final IconData? icon;
-
-  /// Null while the action is unavailable — a sweep already running, say. The label still shows,
-  /// because a button that vanishes mid-tap is worse than one that waits.
-  final VoidCallback? onTap;
-  const _CardAction({required this.label, this.icon, required this.onTap});
-}
-
-/// One group of controls. Structure comes from the container and the header, so the content does
-/// not have to be introduced by a paragraph of text.
-class _Card extends StatelessWidget {
-  final String title;
-  final _CardAction? action;
-  final Widget child;
-  const _Card({required this.title, this.action, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.28),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: theme.colorScheme.onSurface.withValues(alpha: 0.06),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: 28,
-            child: Row(
-              children: [
-                Text(
-                  title.toUpperCase(),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    letterSpacing: 1.2,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                if (action != null)
-                  TextButton.icon(
-                    onPressed: action!.onTap,
-                    icon: action!.icon == null
-                        ? const SizedBox.shrink()
-                        : Icon(action!.icon, size: 16),
-                    label: Text(action!.label),
-                    style: TextButton.styleFrom(
-                      foregroundColor: theme.hintColor,
-                      textStyle: theme.textTheme.labelMedium,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-/// The pinned bottom bar: the error, then the one button that matters.
-class _ActionBar extends StatelessWidget {
-  final bool running;
-  final bool muted;
-  final String? error;
-
-  /// False when the network makes a session impossible — see [Reachability.blocks].
-  final bool canStart;
-  final VoidCallback onPressed;
-  final VoidCallback onMute;
-
-  /// Only set when the error is one the user cannot clear from inside the app.
-  final VoidCallback? onOpenSettings;
-  const _ActionBar({
-    required this.running,
-    required this.muted,
-    required this.error,
-    required this.canStart,
-    required this.onPressed,
-    required this.onMute,
-    this.onOpenSettings,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.scaffoldBackgroundColor,
-        border: Border(
-          top: BorderSide(
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
-          ),
-        ),
-      ),
-      // `top: false` because the bar is already at the bottom; the bottom inset is the one that
-      // matters, and it is what keeps the button clear of the navigation bar.
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (error != null) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        error!,
-                        style: TextStyle(
-                            color: theme.colorScheme.onErrorContainer),
-                      ),
-                      if (onOpenSettings != null) ...[
-                        const SizedBox(height: 4),
-                        TextButton.icon(
-                          onPressed: onOpenSettings,
-                          icon: const Icon(Icons.settings_outlined, size: 18),
-                          label: const Text('Open app settings'),
-                          style: TextButton.styleFrom(
-                            foregroundColor: theme.colorScheme.onErrorContainer,
-                            padding: EdgeInsets.zero,
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
-              // Idle, there is one thing to do. Live, mute is the button that gets pressed
-              // constantly and Stop is the one pressed once — so mute takes the width and the
-              // emphasis, and Stop is set apart where it cannot be hit by mistake.
-              if (!running)
-                FilledButton.icon(
-                  onPressed: canStart ? onPressed : null,
-                  icon: const Icon(Icons.mic_rounded),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(56),
-                    // From the theme, not a bare TextStyle: a button's textStyle replaces the
-                    // theme's outright rather than merging with it, so a hard-coded one silently
-                    // drops the font family with it.
-                    textStyle: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  label: const Text('Start streaming'),
-                )
-              else
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: FilledButton.icon(
-                        onPressed: onMute,
-                        icon: Icon(
-                          muted ? Icons.mic_off_rounded : Icons.mic_rounded,
-                        ),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
-                          // Solid amber while muted: the state has to be readable across the room,
-                          // because the cost of misreading it is talking to nobody.
-                          backgroundColor: muted
-                              ? _mutedColour
-                              : theme.colorScheme.surfaceContainerHighest,
-                          foregroundColor:
-                              muted ? Colors.black : theme.colorScheme.onSurface,
-                          textStyle: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                        label: Text(muted ? 'Unmute' : 'Mute'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: OutlinedButton.icon(
-                        onPressed: onPressed,
-                        icon: const Icon(Icons.stop_rounded),
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
-                          foregroundColor: theme.colorScheme.error,
-                          side: BorderSide(
-                            color: theme.colorScheme.error.withValues(alpha: 0.5),
-                          ),
-                          textStyle: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                        label: const Text('Stop'),
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-

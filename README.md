@@ -46,7 +46,7 @@ actually arriving. Grey means stopped, red means something needs you.
 ```
    YOU SPEAK
        ↓
-   📱 phone mic  →  noise removal  →  Wi-Fi  →  💻 PC  →  "microphone"  →  Discord
+   📱 phone mic  →  Wi-Fi  →  💻 PC  →  noise removal  →  "microphone"  →  Discord
 ```
 
 The app on your phone listens and sends; a small background program on your PC receives it and hands
@@ -59,8 +59,13 @@ microphone" in their dropdown — they never know it's your phone.
 Laptop microphones sound bad. They pick up the fan, the desk and your keyboard, and you're sitting
 too far away from them.
 
-Your phone is much better at this. It has several microphones and a chip whose whole job is removing
-background noise — that's why you sound fine on a phone call in a noisy room.
+Your phone is much better at this. It has several microphones, and it is close to your mouth rather
+than across the desk from it.
+
+The noise comes out on the **PC**, not on the phone. That is where the processor is, so the model
+there can be a far stronger one — strong enough for the hard case, which is not a fan or a hum but a
+**keyboard**: a sound that starts and stops in a few milliseconds. It is on by default and the phone
+switches it off and on while you are talking.
 
 But you can't easily use your phone as your PC's mic. Today people join the Discord call twice, once
 from a second account on the phone, which causes echo and a mess of audio settings.
