@@ -227,8 +227,12 @@ allowed to accept incoming connections, adding it with **+** if it is not in the
 *Help* says the same thing, in the same words.
 
 **macOS: "Earshot.app cannot be opened because the developer cannot be verified."** The build is not
-signed with a paid Apple certificate, so Gatekeeper quarantines it. Either right-click the app and
-choose **Open** the first time, or clear the flag once:
+notarized — that needs a paid Apple developer account — so Gatekeeper blocks it the first time.
+Try to open it once, then go to **System Settings → Privacy & Security**, where an **Open Anyway**
+button appears next to the Earshot entry; it asks for your administrator password. (The old
+right-click → **Open** shortcut is not offered here because Apple removed it in macOS 15.)
+
+Or clear the flag once and skip the dialog, which works on every version:
 
 ```bash
 xattr -dr com.apple.quarantine Earshot.app

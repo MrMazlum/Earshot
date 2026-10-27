@@ -191,6 +191,7 @@ mod macos {
     use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard};
     use std::time::Duration;
@@ -205,6 +206,10 @@ mod macos {
     /// The icon, in pixels. 22 points is the menu-bar glyph; 44 is that at Retina density, which is
     /// what `tray-icon` scales from.
     const ICON_PX: u32 = 44;
+
+    /// What the icon shows before the first `redraw` has read the engine. Named so the tray that
+    /// opens with it and the cache that remembers it cannot disagree.
+    const START_STATE: State = State::Waiting;
 
     // Menu ids. Strings because that is what `muda` carries across the event channel; the handler
     // matches on them rather than holding a closure per item.
@@ -393,6 +398,9 @@ mod macos {
         virtual_mic: CheckMenuItem,
         autostart: CheckMenuItem,
         start_stop: MenuItem,
+        /// The state the icon currently shows, so `redraw` re-encodes it only on a change. Interior
+        /// mutability because `redraw` holds `&Items`.
+        last_icon: Cell<Option<State>>,
     }
 
     /// The menu, laid out like the Linux front-end's: status, what it is doing, where this machine
@@ -465,6 +473,7 @@ mod macos {
                 virtual_mic,
                 autostart,
                 start_stop,
+                last_icon: Cell::new(Some(START_STATE)),
             },
         )
     }
@@ -515,8 +524,17 @@ mod macos {
             .set_text(if inner.running() { "Stop" } else { "Start" });
 
         let _ = tray.set_tooltip(Some(view.tooltip()));
-        if let Ok(icon) = Icon::from_rgba(icon_rgba(icon_state), ICON_PX, ICON_PX) {
-            let _ = tray.set_icon(Some(icon));
+
+        // `tray-icon` builds a fresh `NSImage` out of the pixels on every `set_icon`, changed picture
+        // or not, and this runs every second. It is a 44-pixel square nowhere near the audio path, so
+        // it costs nothing that matters — but re-encoding an identical icon fifty times a minute is
+        // just noise. The icon is redrawn only when the state actually moves, which over a session is
+        // a handful of times.
+        if items.last_icon.get() != Some(icon_state) {
+            if let Ok(icon) = Icon::from_rgba(icon_rgba(icon_state), ICON_PX, ICON_PX) {
+                let _ = tray.set_icon(Some(icon));
+                items.last_icon.set(Some(icon_state));
+            }
         }
     }
 
@@ -569,7 +587,7 @@ mod macos {
         let state = Arc::new(Mutex::new(Inner::new(config)));
         let (menu, items) = menu();
 
-        let icon = Icon::from_rgba(icon_rgba(State::Waiting), ICON_PX, ICON_PX)
+        let icon = Icon::from_rgba(icon_rgba(START_STATE), ICON_PX, ICON_PX)
             .expect("the icon buffer is size * size * 4, which cannot fail");
         let tray = match TrayIconBuilder::new()
             .with_menu(Box::new(menu))

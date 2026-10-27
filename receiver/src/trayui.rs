@@ -327,8 +327,9 @@ pub fn icon_pixels(size: usize, state: State) -> Vec<u8> {
 /// The same icon in **RGBA**, which is what `tray_icon::Icon::from_rgba` wants.
 ///
 /// [`icon_pixels`] is BGRA because a Win32 32-bit DIB section is, and Windows is the only caller
-/// that hands the buffer straight to the OS. The macOS and Linux tray back-ends both want RGBA, so
-/// the swap lives here rather than in each of them.
+/// that hands the buffer straight to the OS. macOS's `tray-icon` wants RGBA, so the swap happens
+/// here rather than in the front-end. Linux calls neither: `ksni` takes a themed symbolic icon by
+/// name and is handed an empty pixmap list, so it never sees these pixels at all.
 pub fn icon_rgba(size: usize, state: State) -> Vec<u8> {
     let mut pixels = icon_pixels(size, state);
     for pixel in pixels.chunks_mut(4) {
