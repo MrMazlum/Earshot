@@ -62,6 +62,11 @@ class SetupPanel extends StatelessWidget {
   final int rate;
   final bool audioOpen;
   final VoidCallback onToggleAudio;
+
+  /// Whether the network row is unfolded. It folds like the others, because on a good day it says
+  /// the same thing every time and does not need the height.
+  final bool networkOpen;
+  final VoidCallback onToggleNetwork;
   final void Function(int key) onSource;
   final void Function(int rate) onRate;
   final bool Function(int key) sourceEnabled;
@@ -125,6 +130,8 @@ class SetupPanel extends StatelessWidget {
     required this.rate,
     required this.audioOpen,
     required this.onToggleAudio,
+    required this.networkOpen,
+    required this.onToggleNetwork,
     required this.onSource,
     required this.onRate,
     required this.sourceEnabled,
@@ -156,6 +163,7 @@ class SetupPanel extends StatelessWidget {
       if (muted) return (word: 'muted', colour: palette.muted.base);
       return switch (link) {
         LinkState.connected => (word: 'live', colour: palette.connected.base),
+        LinkState.notPlaying => (word: 'not playing', colour: palette.noAnswer.base),
         LinkState.connecting => (word: 'waiting', colour: palette.connecting.base),
         _ => (word: 'no reply', colour: palette.noAnswer.base),
       };
@@ -267,6 +275,23 @@ class SetupPanel extends StatelessWidget {
             style:
                 TextStyle(fontFamily: mono, color: p.inkDim, fontSize: 12.5),
           ),
+          // 🔴 The one state this app got wrong for its whole life: a PC that answers every packet
+          // and plays none of them. It is said here in full, because "not playing" in the corner
+          // tells nobody what to do about it.
+          if (link == LinkState.notPlaying) ...[
+            const SizedBox(height: 11),
+            Text(
+              'your pc is answering but playing nothing.\n'
+              'it is holding 0 ms of audio, which a working one never does.\n'
+              'almost always an old receiver: update it on the pc.',
+              style: TextStyle(
+                fontFamily: mono,
+                color: p.noAnswer.base,
+                fontSize: 12.5,
+                height: 1.5,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -275,12 +300,24 @@ class SetupPanel extends StatelessWidget {
   Widget _network(Palette p) {
     final bad = reach.blocks;
     final colour = bad ? p.noAnswer.base : p.connected.base;
+    // A row that folds away a problem is a row that hides it, so trouble forces it open and takes
+    // its fold away. Folding is for the day when it says "on wi-fi, same network as your pc" for
+    // the hundredth time.
+    final folds = !bad;
+    final open = bad || networkOpen;
     return _Row(
       palette: p,
       label: 'network',
       flag: bad ? 'no route' : 'ok',
       flagColour: bad ? colour : p.inkDim,
-      child: Column(
+      open: folds ? open : null,
+      onToggle: folds ? onToggleNetwork : null,
+      child: !open
+          ? _Tap(
+              onTap: onToggleNetwork,
+              child: _Value(palette: p, text: reach.headline.toLowerCase()),
+            )
+          : Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Value(palette: p, text: reach.headline.toLowerCase()),

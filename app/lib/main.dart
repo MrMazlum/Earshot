@@ -37,7 +37,7 @@ void main() => runApp(const EarshotApp());
 ///
 /// ⚠️ Kept in step with `pubspec.yaml` by `test/version_test.dart`, because a version string that
 /// has to be edited in two places is a version string that is wrong in one of them.
-const appVersion = '0.2.0';
+const appVersion = '1.0.0';
 
 /// What the rename dialog returns when its Forget button was the one pressed. A name nobody can
 /// type, because every other string that comes back is a name.
@@ -56,6 +56,16 @@ const _events = EventChannel('earshot/events');
 /// The PC replies once a second, so three seconds of silence is two missed replies and then some.
 /// It is also how long a new session waits before it stops saying "connecting" and says the truth.
 const _answerTimeout = Duration(seconds: 3);
+
+/// How many packets may go to a PC that answers while holding no audio at all, before that is
+/// called what it is.
+///
+/// Counted in packets rather than seconds on a clock, and deliberately: this is a statement about
+/// audio that was actually sent, not about time that happened to pass. A stream is 50 packets a
+/// second, so this is about five seconds of talking -- long enough that a buffer filling or a slow
+/// start cannot trip it, short enough to answer "why can nobody hear me?" before it is asked
+/// twice.
+const _silentPcAfterPackets = 250;
 
 
 /// Android's MediaRecorder.AudioSource constants.
@@ -187,6 +197,17 @@ class _SessionPageState extends State<SessionPage> {
   /// to clean answers no to both, and the panel must show that instead of the wish.
   bool _pcCanClean = false;
   bool _pcCleaning = false;
+
+  /// Whether the PC has *ever* said it was holding audio this session.
+  ///
+  /// One frame of evidence is enough and it is never taken back: a buffer that has drained to
+  /// nothing during a quiet moment is not the same as one that was never filled, and only the
+  /// second of those means the PC is throwing the audio away.
+  bool _pcEverBuffered = false;
+
+  /// Whether the network row is unfolded. Starts folded: on a good day it says the same thing
+  /// every time, and trouble forces it open on its own.
+  bool _networkOpen = false;
   int _rate = 48000;
 
   bool _running = false;
@@ -247,6 +268,17 @@ class _SessionPageState extends State<SessionPage> {
     if (!_running) return LinkState.idle;
     final answered = _answeredMsAgo;
     if (answered >= 0 && answered < _answerTimeout.inMilliseconds) {
+      // 🔴 Answering is not playing. A receiver replies to any packet it can PARSE, including
+      // audio it then throws away -- which is exactly what a pre-Opus receiver does with an Opus
+      // stream, and it is why this app once showed LIVE through an entirely silent session.
+      //
+      // The reply says how much audio the PC is holding. A receiver that is playing has a jitter
+      // buffer with something in it; one that drops every frame reports zero for ever while
+      // packets pour in. So: answering, not muted, hundreds of packets sent, and still nothing
+      // held -- that is a PC that is not playing you.
+      if (!_muted && !_pcEverBuffered && _packets > _silentPcAfterPackets) {
+        return LinkState.notPlaying;
+      }
       return LinkState.connected;
     }
     final started = _startedAt;
@@ -478,6 +510,7 @@ class _SessionPageState extends State<SessionPage> {
           _pcBufferedMs = 0;
           _pcCanClean = false;
           _pcCleaning = false;
+          _pcEverBuffered = false;
           _startedAt = DateTime.now();
           break;
         case 'network':
@@ -497,6 +530,7 @@ class _SessionPageState extends State<SessionPage> {
           // Read from the PC's own replies, never inferred from the switch.
           _pcCanClean = (event['pcCanClean'] as bool?) ?? false;
           _pcCleaning = (event['pcCleaning'] as bool?) ?? false;
+          if (_pcBufferedMs > 0) _pcEverBuffered = true;
           // A PC earns its place on the remembered list by ANSWERING — its own reply, not the
           // fact that somebody typed an address. A list full of machines that were never there
           // is worse than no list.
@@ -717,102 +751,117 @@ class _SessionPageState extends State<SessionPage> {
     // The confirmed session gets the screen that is almost nothing. Confirmed is the operative
     // word: this is the PC's own reply, not "we pressed Start" — see collapsed_view.dart for why
     // that distinction is the whole safety of it.
-    if (_link == LinkState.connected && !_expanded) {
-      return Scaffold(
-        // Crossfaded rather than swapped: going quiet is the app agreeing it has nothing left to
-        // say, and a hard cut looks like a crash. 340 ms, which is long enough to read as a
-        // transition and short enough that nobody waits for it.
-        body: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 340),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, animation) => FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween(begin: 1.04, end: 1.0).animate(animation),
-              child: child,
-            ),
-          ),
-          child: CollapsedView(
-            key: ValueKey(_muted ? 'muted' : 'connected'),
-            palette: widget.palette,
-            state: _muted ? 'muted' : 'connected',
-            level: _level,
-            elapsed: _startedAt == null
-                ? Duration.zero
-                : DateTime.now().difference(_startedAt!),
-            onExpand: () => setState(() => _expanded = true),
-            onToggleMute: _toggleMute,
-          ),
-        ),
-      );
-    }
+    final quiet = _link == LinkState.connected && !_expanded;
 
     final active = MicSource.usable(_source, _rate);
-    return SetupPanel(
-      palette: widget.palette,
-      link: _link,
-      running: _running,
-      muted: _muted,
-      reach: _reach,
-      onOpenWifi: () => _control.invokeMethod('openWifiSettings'),
-      rows: _rows,
-      target: _target,
-      searching: _searching,
-      onSearch: _search,
-      onPick: _pick,
-      onRename: _rename,
-      manualOpen: _manualOpen,
-      onToggleManual: () => setState(() => _manualOpen = !_manualOpen),
-      entry: _entry,
-      entryMessage: _entryMessage,
-      onEntryChanged: _onEntryChanged,
-      micName: active.name,
-      micBlurb: MicSource.byKey(_source).blurb,
-      source: _source,
-      rate: _rate,
-      audioOpen: _audioOpen,
-      onToggleAudio: () => setState(() => _audioOpen = !_audioOpen),
-      onSource: (key) => setState(() => _source = key),
-      onRate: (rate) => setState(() {
+    final Widget screen = quiet
+        ? Scaffold(
+            key: ValueKey(_muted ? 'quiet-muted' : 'quiet-live'),
+            backgroundColor: widget.palette.backdrop,
+            body: CollapsedView(
+              palette: widget.palette,
+              state: _muted ? 'muted' : 'connected',
+              level: _level,
+              pcBufferedMs: _pcBufferedMs,
+              answering: _answeredMsAgo >= 0,
+              elapsed: _startedAt == null
+                  ? Duration.zero
+                  : DateTime.now().difference(_startedAt!),
+              onExpand: () => setState(() => _expanded = true),
+              onToggleMute: _toggleMute,
+            ),
+          )
+        : SetupPanel(
+            key: const ValueKey('panel'),
+            palette: widget.palette,
+            link: _link,
+            running: _running,
+            muted: _muted,
+            reach: _reach,
+            onOpenWifi: () => _control.invokeMethod('openWifiSettings'),
+            rows: _rows,
+            target: _target,
+            searching: _searching,
+            onSearch: _search,
+            onPick: _pick,
+            onRename: _rename,
+            manualOpen: _manualOpen,
+            onToggleManual: () => setState(() => _manualOpen = !_manualOpen),
+            entry: _entry,
+            entryMessage: _entryMessage,
+            onEntryChanged: _onEntryChanged,
+            micName: active.name,
+            micBlurb: MicSource.byKey(_source).blurb,
+            source: _source,
+            rate: _rate,
+            audioOpen: _audioOpen,
+            onToggleAudio: () => setState(() => _audioOpen = !_audioOpen),
+            networkOpen: _networkOpen,
+            onToggleNetwork: () => setState(() => _networkOpen = !_networkOpen),
+            onSource: (key) => setState(() => _source = key),
+            onRate: (rate) => setState(() {
         _rate = rate;
         _source = MicSource.usable(_source, rate).key;
-      }),
-      // Both sources are Android's own and both work at either rate, so nothing is ever greyed
-      // out here now. Kept because the panel asks, and a lie would be shorter.
-      sourceEnabled: (key) => true,
-      clean: _clean,
-      // ⚠️ The PC decides whether cleaning is happening, not this switch. Cleaning at 48 kHz only
-      // is the receiver's rule, so at 16 kHz the PC answers "not cleaning" and the panel says so
-      // rather than this screen second-guessing it.
-      pcCanClean: _pcCanClean,
-      pcCleaning: _pcCleaning,
-      onClean: _setClean,
-      sources: [
+            }),
+            // Both sources are Android's own and both work at either rate, so nothing is ever greyed
+            // out here now. Kept because the panel asks, and a lie would be shorter.
+            sourceEnabled: (key) => true,
+            clean: _clean,
+            // ⚠️ The PC decides whether cleaning is happening, not this switch. Cleaning at 48 kHz only
+            // is the receiver's rule, so at 16 kHz the PC answers "not cleaning" and the panel says so
+            // rather than this screen second-guessing it.
+            pcCanClean: _pcCanClean,
+            pcCleaning: _pcCleaning,
+            onClean: _setClean,
+            sources: [
         for (final s in MicSource.all) (key: s.key, name: s.name),
-      ],
-      onAbout: () => _showMicInfo(context),
-      level: _level,
-      actualRate: _actualRate,
-      kbps: kbps,
-      packets: _packets,
-      answeredMsAgo: _answeredMsAgo,
-      pcBufferedMs: _pcBufferedMs,
-      // Greyed rather than allowed-and-then-refused: the network row directly above says why, in
-      // full, and a button that can be pressed into a session that cannot work is what got us here.
-      canStart: _target != null && !_reach.blocks,
-      error: _error,
-      onOpenSettings: _permissionBlocked
+            ],
+            onAbout: () => _showMicInfo(context),
+            level: _level,
+            actualRate: _actualRate,
+            kbps: kbps,
+            packets: _packets,
+            answeredMsAgo: _answeredMsAgo,
+            pcBufferedMs: _pcBufferedMs,
+            // Greyed rather than allowed-and-then-refused: the network row directly above says why, in
+            // full, and a button that can be pressed into a session that cannot work is what got us here.
+            canStart: _target != null && !_reach.blocks,
+            error: _error,
+            onOpenSettings: _permissionBlocked
           ? () => _control.invokeMethod('openAppSettings')
           : null,
-      onToggle: _toggle,
-      onMute: _toggleMute,
-      // The way back to the quiet screen. Only offered when there is one to go back to — a
-      // confirmed session — because collapsing anything else would hide a fault.
-      onCollapse: _link == LinkState.connected && _expanded
+            onToggle: _toggle,
+            onMute: _toggleMute,
+            // The way back to the quiet screen. Only offered when there is one to go back to — a
+            // confirmed session — because collapsing anything else would hide a fault.
+            onCollapse: _link == LinkState.connected && _expanded
           ? () => setState(() => _expanded = false)
           : null,
-      version: 'earshot $appVersion',
+            version: 'earshot $appVersion',
+          );
+
+    // 🔴 One switcher across BOTH screens, not one inside the quiet branch.
+    //
+    // It used to animate only between the quiet screen's own two states, because the panel was
+    // returned from a different branch entirely — so hiding and coming back was a hard cut, and he
+    // said it felt instant. A hard cut between two full-screen layouts reads as a crash rather
+    // than a change of mind.
+    //
+    // 340 ms: long enough to read as a transition, short enough that nobody waits for it.
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 340),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          // The arriving screen settles the last 4% inwards. Going quiet it reads as the app
+          // stepping back; coming out of it, as the detail stepping forward.
+          scale: Tween(begin: 1.04, end: 1.0).animate(animation),
+          child: child,
+        ),
+      ),
+      child: screen,
     );
   }
 }

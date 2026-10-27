@@ -86,6 +86,8 @@ void main() {
         CollapsedView(
           palette: palette,
           state: 'connected',
+          pcBufferedMs: 61,
+          answering: true,
           level: 0.62,
           elapsed: const Duration(minutes: 7, seconds: 12),
           onExpand: () {},
@@ -103,6 +105,8 @@ void main() {
         CollapsedView(
           palette: palette,
           state: 'connected',
+          pcBufferedMs: 61,
+          answering: true,
           level: 0.22,
           elapsed: const Duration(minutes: 41, seconds: 3),
           onExpand: () {},
@@ -120,6 +124,8 @@ void main() {
         CollapsedView(
           palette: palette,
           state: 'muted',
+          pcBufferedMs: 61,
+          answering: true,
           level: 0,
           elapsed: const Duration(minutes: 12, seconds: 48),
           onExpand: () {},

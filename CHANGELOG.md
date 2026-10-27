@@ -4,6 +4,41 @@ Notable changes, newest first. Releases before 0.2.0 are on the
 [releases page](https://github.com/MrMazlum/Earshot/releases); this file starts where it was
 started.
 
+## 1.0.0
+
+Feature-complete. Earshot does one thing — your phone's microphone, on your PC — and it now does
+it well enough that nothing further is planned. Changes from here are fixes.
+
+### Fixed
+
+- 🔴 **"Live" no longer claims more than it knows.** A receiver replies to any packet it can
+  *parse*, including audio it then throws away — which is exactly what a pre-Opus receiver does
+  with an Opus stream. The phone showed LIVE through entirely silent sessions.
+
+  The reply already says how much audio the PC is holding. A receiver that is playing has
+  something in its jitter buffer; one that drops every frame reports zero for ever while packets
+  pour in. After about five seconds of talking with nothing held, the phone now says **not
+  playing**, in words, with what to do about it — and refuses to collapse to the quiet screen so
+  the explanation cannot be missed.
+
+### Changed
+
+- **Hiding the detail and coming back is a transition, not a cut.** The crossfade existed but only
+  spanned the quiet screen's own two states; the panel was built in a different branch, so moving
+  between them was an instant swap. One switcher now spans both — 340 ms, fade and a 4% settle.
+- **The live screen shows the delay** — `pc holds 61 ms` — in the panel's monospace, so the figure
+  does not jitter as it changes and the two screens read as one app. Shown only once the PC has
+  answered: before that it would be a number nobody measured.
+- **The network row folds**, like the others. On a good day it says the same thing every time and
+  does not need the height. Trouble forces it open and takes the fold away, because a row that can
+  hide a problem will.
+- **The VPN-with-PC-on-the-same-Wi-Fi line is four lines shorter.** That is the ordinary state for
+  anyone running a tailnet, so it is not news: *"vpn on, pc on this wi-fi — this phone is x.x.x.x.
+  usually fine."*
+- The README said the return direction was *planned*. It is not planned: Earshot is a microphone
+  and only a microphone, and sending the call's audio back to the phone is a different program
+  with a different latency budget. Said plainly rather than left as an implied promise.
+
 ## 0.2.0
 
 **Noise cleaning moves from the phone to the PC.**

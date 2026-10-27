@@ -72,9 +72,9 @@ from a second account on the phone, which causes echo and a mess of audio settin
 
 </details>
 
-**Planned, not built yet:** the return direction, so the call's audio goes back to the phone and you
-plug your headset into the **phone** instead — one device for both, no wires to the PC at all. Today
-Earshot is a microphone only.
+**Earshot is a microphone, and only a microphone.** Audio goes phone → PC and never the other way.
+Sending the call's audio back to the phone would make it a headset, which is a different program
+with a different latency budget; it is deliberately out of scope rather than waiting in a queue.
 
 <br>
 

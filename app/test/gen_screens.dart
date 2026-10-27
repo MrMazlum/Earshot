@@ -254,6 +254,55 @@ void main() {
     await _shoot(tester, '13-pc-cannot-clean');
   });
 
+  /// 🔴 The state that cost an evening: the PC replies to every packet and plays none of them,
+  /// which is what a pre-Opus receiver does with an Opus stream. The app used to show LIVE.
+  testWidgets('the pc answers but plays nothing', (tester) async {
+    await _open(tester);
+    await tester.tap(find.text('+ not listed? type it in'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '192.168.1.20');
+    await tester.pumpAndSettle();
+    await _start(tester);
+    // Six seconds of a PC answering while holding nothing at all.
+    await _emit(tester, {
+      'event': 'stats',
+      'packets': 300,
+      'bytes': 300 * 1936,
+      'level': 0.4,
+      'rate': 48000,
+      'source': 7,
+      'answeredMsAgo': 20,
+      'pcBufferedMs': 0.0,
+      'pcCanClean': false,
+      'pcCleaning': false,
+    });
+    await tester.pump(const Duration(seconds: 6));
+    await _emit(tester, {
+      'event': 'stats',
+      'packets': 600,
+      'bytes': 600 * 1936,
+      'level': 0.4,
+      'rate': 48000,
+      'source': 7,
+      'answeredMsAgo': 20,
+      'pcBufferedMs': 0.0,
+      'pcCanClean': false,
+      'pcCleaning': false,
+    });
+    await _shoot(tester, '14-pc-answers-but-plays-nothing');
+  });
+
+  /// His own case: Tailscale up, PC on the same Wi-Fi underneath. The ordinary state for anyone
+  /// running a tailnet, so it is said in one short line rather than four — and the row folds.
+  testWidgets('tailscale up, pc on the same wi-fi', (tester) async {
+    _network = {'transport': 'vpn', 'ip': '100.102.242.57', 'prefix': 32,
+                'localIp': '192.168.1.9', 'localPrefix': 24};
+    await _open(tester);
+    await tester.tap(find.text('[+]').first);
+    await tester.pumpAndSettle();
+    await _shoot(tester, '15-tailscale-same-wifi');
+  });
+
   testWidgets('a VPN is up', (tester) async {
     _network = {'transport': 'vpn', 'ip': '10.2.0.3', 'prefix': 32};
     await _open(tester);

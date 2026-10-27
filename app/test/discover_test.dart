@@ -87,7 +87,9 @@ void main() {
       });
       final verdict = reachability(net, const Destination('192.168.1.13', 47811));
       expect(verdict.verdict, Reach.warn);
-      expect(verdict.headline, contains('your PC is on this Wi-Fi'));
+      // Short on purpose since 1.0.0: this is the ordinary state for anyone on a tailnet, so it
+      // says so in one line rather than four. What matters is that it still names the Wi-Fi.
+      expect(verdict.headline, contains('PC on this wi-fi'));
       expect(verdict.blocks, isFalse);
     });
 

@@ -28,6 +28,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+// Only for `mono`: the delay figure on this screen is written in the same face as every number on
+// the panel, so the two screens read as one app rather than two.
+import 'setup_panel.dart' show mono;
+
 import 'theme.dart';
 
 /// How long after the last touch the words fade down to almost nothing.
@@ -42,6 +46,14 @@ class CollapsedView extends StatefulWidget {
 
   /// What the microphone is hearing, 0..1. Drives the only thing that moves.
   final double level;
+
+  /// How much audio the PC says it is holding, in milliseconds — the one number that says what
+  /// the delay actually is, rather than what it was designed to be.
+  final double pcBufferedMs;
+
+  /// Whether the PC has answered at all. Without a reply the figure above is not a measurement of
+  /// anything, and a number nobody measured is worse than no number.
+  final bool answering;
 
   /// How long the session has been up, as the one number worth keeping on screen.
   final Duration elapsed;
@@ -58,6 +70,8 @@ class CollapsedView extends StatefulWidget {
     required this.palette,
     required this.state,
     required this.level,
+    required this.pcBufferedMs,
+    required this.answering,
     required this.elapsed,
     required this.onExpand,
     required this.onToggleMute,
@@ -184,6 +198,23 @@ class _CollapsedViewState extends State<CollapsedView>
                           fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
+                      // The delay, in the panel's own monospace so the figure does not jitter as
+                      // it changes and so the two screens read as one app. Shown only once the PC
+                      // has answered: before that there is nothing to report, and a zero would be
+                      // a measurement nobody took.
+                      if (widget.answering) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          'pc holds ${widget.pcBufferedMs.round()} ms',
+                          style: TextStyle(
+                            fontFamily: mono,
+                            color: ink.withValues(alpha: 0.55),
+                            fontSize: 13,
+                            letterSpacing: 0.5,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

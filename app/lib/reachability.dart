@@ -254,12 +254,12 @@ Reachability reachability(NetworkState net, Destination? target) {
       // their own addresses and leave local traffic alone. So the question is not "is a VPN on",
       // it is "is the PC still on the Wi-Fi underneath".
       if (private && sameSubnet(net.localIp, net.localPrefix, host)) {
+        // Short on purpose. This is the ordinary state for anyone running Tailscale, so it is not
+        // news and does not deserve four lines explaining itself every time the screen opens.
         return Reachability(
           Reach.warn,
-          'A VPN is on, but your PC is on this Wi-Fi',
-          detail: 'This phone is ${net.localIp} on the Wi-Fi, and $host is on the same network. '
-              'Most VPNs leave local traffic alone, so this usually works. If nothing arrives, '
-              'turn the VPN off and try again.',
+          'VPN on, PC on this wi-fi',
+          detail: 'This phone is ${net.localIp}. Usually fine.',
         );
       }
       return const Reachability(
