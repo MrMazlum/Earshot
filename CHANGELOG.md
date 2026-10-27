@@ -4,6 +4,38 @@ Notable changes, newest first. Releases before 0.2.0 are on the
 [releases page](https://github.com/MrMazlum/Earshot/releases); this file starts where it was
 started.
 
+## Unreleased
+
+### Added
+
+- **macOS support.** The receiver builds, tests and ships on macOS, and now does what the other two
+  platforms do: plays the phone through the sound card, into a **BlackHole** virtual microphone so
+  Discord and Zoom see it as an input, sits in the **menu bar** as a tray icon, and can **start at
+  login** (a LaunchAgent in `~/Library/LaunchAgents`). The audio core — cpal over CoreAudio, libopus,
+  DeepFilterNet 3 — needed no changes at all; what was missing was the platform glue around it
+- **`blackhole.rs`**, the macOS counterpart of `cable.rs`: detecting BlackHole, and the guided path to
+  installing it when it is not there. BlackHole is a **loopback**, so unlike a Windows cable the
+  device Earshot plays into and the device the user picks in Discord are **the same name**,
+  `BlackHole 2ch`
+- A *Get BlackHole* entry in the tray, enabled only when it is actually missing
+
+### Changed
+
+- `help.rs` knows three platforms rather than two (`Os::{Windows, Linux, Macos}`), so the "nothing is
+  arriving" advice is no longer the Linux `ufw` text on a Mac
+- The tray's copy about speakers is no longer Windows-only wording; macOS says the same thing about
+  BlackHole that Windows says about VB-Cable
+
+### Notes
+
+- macOS releases are **ad-hoc signed, not notarized** — Gatekeeper needs a nudge the first time, and
+  the README says how
+- New dependencies, all GPL-3.0-compatible: `tray-icon` (MIT OR Apache-2.0) for the menu bar, and
+  `objc2`, `objc2-app-kit`, `objc2-foundation` (MIT) to drive the AppKit run loop it requires.
+  They are macOS-only, so nothing changes for Linux or Windows builds
+- **macOS latency is unchanged.** The virtual microphone uses the same cpal output path as the
+  speakers, so it adds no buffering of its own; the tray and the login item add none at all
+
 ## 1.0.0
 
 Feature-complete. Earshot does one thing — your phone's microphone, on your PC — and it now does
