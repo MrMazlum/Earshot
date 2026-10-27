@@ -208,7 +208,6 @@ mod macos {
     const ID_VIRTUAL_MIC: &str = "virtual-mic";
     const ID_AUTOSTART: &str = "autostart";
     const ID_START_STOP: &str = "start-stop";
-    const ID_REMOVE_MIC: &str = "remove-mic";
     const ID_GET_BLACKHOLE: &str = "get-blackhole";
     const ID_QUIT: &str = "quit";
 
@@ -341,12 +340,6 @@ mod macos {
                     inner.start();
                 }
             }
-            ID_REMOVE_MIC => {
-                inner.stop();
-                if let Err(e) = earshot::virtualmic::remove(&inner.config.virtual_mic_name) {
-                    inner.error = Some(e);
-                }
-            }
             ID_GET_BLACKHOLE => {
                 if let Err(e) = earshot::blackhole::open_download_page() {
                     inner.error = Some(e);
@@ -371,7 +364,12 @@ mod macos {
     }
 
     /// The menu, laid out like the Linux front-end's: status, what it is doing, where this machine
-    /// is, which input to pick, the two toggles, start/stop, remove, quit.
+    /// is, which input to pick, the two toggles, start/stop, quit.
+    ///
+    /// There is deliberately **no "Remove the virtual microphone" item**, unlike Linux. macOS
+    /// neither created BlackHole nor can remove it — `virtualmic::remove` is a no-op here — so an
+    /// entry that stopped the engine and deleted nothing would be a lie, and a harmful one. Windows
+    /// omits the item for the same reason.
     fn menu() -> (Menu, Items) {
         let status = MenuItem::with_id("status", "Stopped", false, None);
         let detail = MenuItem::with_id("detail", "Not running", false, None);
@@ -389,7 +387,6 @@ mod macos {
             CheckMenuItem::with_id(ID_VIRTUAL_MIC, "Virtual microphone", true, true, None);
         let autostart = CheckMenuItem::with_id(ID_AUTOSTART, "Start at login", true, false, None);
         let start_stop = MenuItem::with_id(ID_START_STOP, "Start", true, None);
-        let remove = MenuItem::with_id(ID_REMOVE_MIC, "Remove the virtual microphone", true, None);
         let quit = MenuItem::with_id(ID_QUIT, "Quit", true, None);
 
         let sep1 = PredefinedMenuItem::separator();
@@ -409,7 +406,6 @@ mod macos {
             &autostart,
             &sep3,
             &start_stop,
-            &remove,
             &sep4,
             &quit,
         ])
