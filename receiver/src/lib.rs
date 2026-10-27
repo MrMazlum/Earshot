@@ -10,8 +10,14 @@
 //! are in `CONTRIBUTING.md`.
 
 pub mod audio;
-#[cfg(all(feature = "tray", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(
+    feature = "tray",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 pub mod autostart;
+/// BlackHole on macOS: the borrowed loopback that other applications see as an input, and the
+/// guided path to installing it. The macOS counterpart of [`cable`].
+pub mod blackhole;
 pub mod cable;
 /// Cleaning the voice on this machine, after it arrives — see the file for why it is here and
 /// not on the phone.

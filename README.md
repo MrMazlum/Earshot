@@ -13,6 +13,7 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 | 📱 **Phone** | [**earshot.apk**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot.apk) | Android. Sideload it — not on Play yet |
 | 🪟 **Windows** | [**earshot-receiver-windows-x86_64.zip**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-windows-x86_64.zip) | Also needs VB-Cable — free, once |
 | 🐧 **Linux** | [**earshot-receiver-linux-x86_64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-linux-x86_64.tar.gz) | Nothing else to install |
+| 🍎 **macOS** | [**earshot-receiver-macos-universal.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-macos-universal.tar.gz) | Universal — Apple silicon and Intel. Also needs BlackHole — free, once |
 
 ## Quick start
 
@@ -32,6 +33,16 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 1. **Extract and run `./earshot-tray`.** This machine's address is in the icon's menu
 2. **On the phone:** install the APK. **Your PC is already in the list** — tap it, press **Start**
 3. **In Discord**, pick **Earshot** as your microphone
+
+### 🍎 macOS
+
+1. **Install BlackHole.** `brew install --cask blackhole-2ch`, or download it from
+   **[existential.audio/blackhole](https://existential.audio/blackhole/)**. Free, open source,
+   once — this is the macOS version of the VB-Cable step
+2. **Unzip Earshot and open `Earshot.app`.** A microphone icon appears in the menu bar. Nothing
+   else opens — the tray has no window by design
+3. **On the phone:** install the APK. **Your Mac is already in the list** — tap it, press **Start**
+4. **In Discord**, pick **`BlackHole 2ch`** as your microphone
 
 ---
 
@@ -147,6 +158,21 @@ Earshot does not rename it for you on purpose: the name lives in `HKEY_LOCAL_MAC
 would mean elevating to administrator in order to edit another vendor's driver settings — for a
 cosmetic change you can make yourself in fifteen seconds.
 
+## On macOS your microphone is called `BlackHole 2ch`
+
+Same reason, different vendor. macOS will not let a program invent a microphone either, so Earshot
+plays into **BlackHole** — a free, open-source virtual audio driver — and you pick that same device
+as your microphone.
+
+Unlike Windows, there is **nothing to get backwards**: BlackHole is a single device that is both an
+input and an output, so Earshot plays into `BlackHole 2ch` and you record from `BlackHole 2ch`. One
+name, both ends.
+
+BlackHole installs once, from Homebrew (`brew install --cask blackhole-2ch`) or its own site, and
+Earshot only ever *detects* it — it never downloads or runs the installer, the same as it does not
+for VB-Cable. If you install the wider builds (16, 64 or 128 channels) rather than the 2-channel
+one, Earshot will use whichever is present, but the name in Discord will be that build's.
+
 ## Troubleshooting
 
 **Start with what the app itself says.** The phone shows `CONNECTED` only while the PC is actually
@@ -193,6 +219,27 @@ sudo ufw allow from 192.168.0.0/16 to any port 47811 proto udp
 
 That is the range home routers usually hand out. If your addresses start `10.` or `172.16`–`172.31`,
 use `10.0.0.0/8` or `172.16.0.0/12` instead — the receiver prints the address it is on.
+
+On macOS, the firewall is off unless you turned it on, but once on it drops incoming connections for
+a program with no rule and does not say so — the same silent failure as Windows, with no one-line
+command to fix it. Open **System Settings → Network → Firewall → Options** and make sure Earshot is
+allowed to accept incoming connections, adding it with **+** if it is not in the list. The tray's own
+*Help* says the same thing, in the same words.
+
+**macOS: "Earshot.app cannot be opened because the developer cannot be verified."** The build is not
+notarized — that needs a paid Apple developer account — so Gatekeeper blocks it the first time.
+Try to open it once, then go to **System Settings → Privacy & Security**, where an **Open Anyway**
+button appears next to the Earshot entry; it asks for your administrator password. (The old
+right-click → **Open** shortcut is not offered here because Apple removed it in macOS 15.)
+
+Or clear the flag once and skip the dialog, which works on every version:
+
+```bash
+xattr -dr com.apple.quarantine Earshot.app
+```
+
+**macOS: green icon, but Discord hears silence.** You picked a different device in Discord's input
+list. It has to be **`BlackHole 2ch`** — the same one Earshot plays into, not your speakers.
 
 **Still nothing.** Guest Wi-Fi and "client isolation" block device-to-device traffic outright, and no
 firewall rule will help. Turning on your phone's hotspot and joining the PC to it rules that out in a
@@ -257,6 +304,10 @@ published here, or not claimed at all. It has not been measured, so it is not cl
   their site — Earshot only detects it and links to it, and never downloads or runs anything on your
   behalf. Shipping our own would need a Windows driver signed by Microsoft, which needs a registered
   company and hundreds of euros a year. Linux needs nothing extra
+- **macOS needs one extra free program too** (BlackHole), for the same reason and with the same
+  policy: an audio device is a driver macOS will not let a user program create, so you install
+  BlackHole yourself and Earshot only detects it and points at its page. BlackHole is open source
+  (GPL-3.0), which is why it is the one recommended here
 - **It only works on your own network.** No cloud, no server, no account. That's deliberate — your
   microphone should not be reachable from the internet
 - **Nothing is collected.** No analytics, no crash reports, no tracking. The code is public so you
@@ -282,10 +333,10 @@ report a problem privately.
 |---|---|---|
 | 📱 **Android app** | records, compresses, sends over Wi-Fi, finds the PC by itself | only on its own subnet — anything further has to be typed |
 | 💻 **PC receiver** | receives, survives loss and reordering, plays out or into a virtual mic | — |
-| 🖱️ **PC app** | tray icon on both platforms: the address, start/stop, start-at-login — no terminal | no window, no level meter |
+| 🖱️ **PC app** | tray icon on all three platforms: the address, start/stop, start-at-login — no terminal | no window, no level meter |
 | 🐧 **Linux** | works, virtual microphone included (`--virtual-mic`) | — |
 | 🪟 **Windows** | works — audio arrives, VB-Cable path, tray icon | the input is VB-Audio's `CABLE Output` unless you rename it |
-| 🍎 **macOS** | nothing — never built, not in CI | not a priority. The code path exists: install BlackHole and use `--device` |
+| 🍎 **macOS** | works — receiver, menu-bar tray, BlackHole virtual microphone | the input is BlackHole's `BlackHole 2ch`, and the download is unsigned, so Gatekeeper needs a nudge |
 
 **Also missing:** the PC → phone direction, automatic discovery, and encryption. Those are the next
 steps, in that order.
@@ -295,6 +346,10 @@ router or sound card yet. If it breaks on yours, that is worth an issue — it i
 nobody can find alone.
 
 ## Build from source
+
+The receiver needs **Rust** and, to build libopus from source, **CMake**. On macOS that is
+`brew install cmake`; on Debian/Ubuntu, `sudo apt install cmake libasound2-dev`. The phone app
+needs Flutter.
 
 ```bash
 # terminal 1 — the PC side. Prints the address the phone will find it at.
@@ -335,8 +390,12 @@ arriving. `--uninstall` removes the login item.
 
 On Windows the same binary ships as `Earshot.exe` and does this by itself: the first time it runs it
 copies itself into `%LOCALAPPDATA%\Earshot` and adds a `HKCU\...\Run` entry, the way Discord and
-Spotify do, so `--install` is only needed on Linux. First run only — untick "Start at login" in the
-menu and it stays unticked.
+Spotify do. First run only — untick "Start at login" in the menu and it stays unticked.
+
+On Linux and on macOS nothing is added until you ask: run `--install`, or tick **Start at login** in
+the menu bar icon. Windows assumes, because it is the one platform where the user launches a bare
+binary with no terminal in which to pass a flag; macOS and Linux have somewhere to put the question,
+so they ask it instead of answering it for you.
 
 On GNOME this needs the AppIndicator extension — Ubuntu turns it on by default.
 

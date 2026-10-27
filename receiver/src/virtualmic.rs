@@ -1,6 +1,6 @@
 //! The virtual microphone: making other applications see Earshot as an input device.
 //!
-//! This is the step that turns the project from a demo into something usable. The two platforms do
+//! This is the step that turns the project from a demo into something usable. The platforms do
 //! genuinely different things, and the difference is not cosmetic:
 //!
 //! - **Linux** can be *asked* to invent a device. A null sink plus a remapped source costs two
@@ -8,9 +8,13 @@
 //! - **Windows** cannot. Creating an audio endpoint needs a kernel driver, and shipping one needs a
 //!   signed WHQL package — hundreds of euros a year. So Windows borrows somebody else's: VB-Cable
 //!   is installed by the user, and Earshot plays into it.
+//! - **macOS** cannot either, for the same reason. It borrows BlackHole — but BlackHole is a
+//!   loopback rather than a cable with two ends, so here the device we open and the device the user
+//!   picks are the *same* string. See [`crate::blackhole`].
 //!
-//! Both paths end in the same shape, [`Devices`]: what *we* should open, and what the *user* should
-//! pick in Discord. Those are never the same string, which is the thing that confuses people.
+//! Every path ends in the same shape, [`Devices`]: what *we* should open, and what the *user* should
+//! pick in Discord. On Windows those are two different names, which is the thing that confuses
+//! people; on Linux and macOS there is one.
 
 /// The outcome of arranging a virtual microphone, whatever it took.
 pub struct Devices {
@@ -178,13 +182,55 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+mod platform {
+    //! macOS cannot invent an audio endpoint either, so Earshot borrows BlackHole — a loopback whose
+    //! input is fed from its own output. Unlike the Windows cable the two ends share **one name**,
+    //! so the device we open and the device the user picks in Discord are the same string; that is
+    //! the only thing that differs from [`crate::cable`] on Windows. See [`crate::blackhole`].
+    //!
+    //! Nothing is created and nothing is removed: BlackHole belongs to its own installer.
+
+    use super::Devices;
+
+    pub fn ensure(_name: &str) -> Result<Devices, String> {
+        match crate::blackhole::find()? {
+            Some(found) => Ok(Devices {
+                // The same device in both fields, on purpose: what we open is the loopback, and the
+                // user picks that same loopback as their microphone.
+                device_hint: found.device.clone(),
+                display: found.device,
+                // BlackHole is installed, not created by us, so it is never "new".
+                created: false,
+            }),
+            // `blackhole::preflight` normally gets there first and offers to fix this, so reaching
+            // here means the tray or a non-interactive run hit it. The message still has to stand
+            // alone.
+            None => Err(crate::blackhole::missing_message(
+                &crate::audio::output_device_names().unwrap_or_default(),
+            )),
+        }
+    }
+
+    pub fn clear_routing() {}
+
+    /// Nothing to remove — BlackHole is its vendor's, and uninstalling it is that installer's job.
+    pub fn remove(_name: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+)))]
 mod platform {
     use super::Devices;
 
     pub fn ensure(_name: &str) -> Result<Devices, String> {
         Err("Earshot's virtual microphone is not implemented on this platform yet. \
-             On macOS, install BlackHole and point Earshot at it with --device."
+             Linux, Windows and macOS are; point Earshot at an output device with --device."
             .to_string())
     }
 

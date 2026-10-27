@@ -49,11 +49,13 @@ cd app && flutter test && flutter analyze
 ships can read it; without `--locked` a newer cargo quietly rewrites it and the build stops working
 on older toolchains.
 
-CI builds the receiver on Linux **and** Windows on every push. There is no cross-compiler in the
-usual development setup, so the Windows job is the only thing that compiles that target — if it
-goes red, it is broken, and nothing local would have caught it. Anything behind
-`#[cfg(target_os = "windows")]` should therefore be written as if it will not be tested, and the
-platform-independent logic pulled out of it and unit-tested where it can be.
+CI builds the receiver on Linux, Windows **and** macOS on every push. There is no cross-compiler in
+the usual development setup, so the Windows job is the only thing that compiles that target, and CI
+is just as much the only place the Intel half of the macOS build is compiled. If either goes red,
+that build is broken and nothing local would have caught it. Anything behind
+`#[cfg(target_os = "windows")]` — and the `x86_64-apple-darwin` slice — should therefore be written
+as if it will not be tested, with the platform-independent logic pulled out of it and unit-tested
+where it can be.
 
 **Everything printed to a terminal is plain ASCII** — no em dashes, no ellipsis characters, no
 arrows. A Windows console is not reliably UTF-8, and on a Turkish or Western-European code page that

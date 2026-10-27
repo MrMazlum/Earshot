@@ -239,8 +239,15 @@ impl std::fmt::Display for LanAddress {
 /// Interfaces that are never the Wi-Fi the phone is on: container bridges, VM bridges, and the
 /// tunnel devices of VPNs that name themselves conventionally.
 ///
-/// These are *Linux* device names, matched at the start, where a name is short and the prefix is
-/// the whole identity of the thing (`docker0`, `wg0`, `virbr1`).
+/// These are *Linux* and *macOS* device names, matched at the start, where a name is short and the
+/// prefix is the whole identity of the thing (`docker0`, `wg0`, `virbr1`, `utun3`, `awdl0`).
+///
+/// ⚠️ macOS's `bridge0`/`bridge100` and `ap1` are deliberately **not** listed, even though a
+/// Thunderbolt Bridge holding `192.168.x.1/24` would otherwise outrank the real Wi-Fi. Those same
+/// names are what Internet Sharing creates — and when the phone has joined the Mac's own hotspot,
+/// that interface *is* the address it can reach. The name cannot tell the two apart, so neither is
+/// filtered; the receiver lists all of them and the user picks, which is the same answer it gives a
+/// machine on both Ethernet and Wi-Fi.
 const VIRTUAL_PREFIXES: &[&str] = &[
     "virbr",
     "docker",
@@ -251,8 +258,13 @@ const VIRTUAL_PREFIXES: &[&str] = &[
     "wg",
     "tailscale",
     "zt",
-    "utun",
-    "vmnet",
+    "utun",  // macOS VPN tunnels - Tailscale, WARP and WireGuard all use these
+    "vmnet", // VMware Fusion
+    "awdl",  // Apple Wireless Direct Link (AirDrop). Never a phone's LAN
+    "llw",   // the low-latency companion to awdl0
+    "anpi",  // Apple Network Processor interfaces, internal to the machine
+    "stf",   // macOS 6to4 tunnel stub
+    "gif",   // macOS Teredo tunnel stub
 ];
 
 /// The same idea for Windows, which needs its own list and its own matching rule.
@@ -1092,6 +1104,35 @@ mod tests {
             assert!(
                 is_lan_candidate(name, Ipv4Addr::new(192, 168, 1, 42), mask),
                 "{name} is a real network and must be offered"
+            );
+        }
+    }
+
+    /// macOS names its internal and tunnel interfaces in ways Linux never does. `awdl0`, `llw0` and
+    /// `anpi0` are on every Mac, and a private address on any of them is not the Wi-Fi the phone is
+    /// on — the `utun` devices already in the list are the VPN case.
+    #[test]
+    fn macos_internal_interfaces_are_not_offered() {
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        for name in ["awdl0", "llw0", "anpi0", "anpi1", "stf0", "gif0", "utun3"] {
+            assert!(
+                !is_lan_candidate(name, Ipv4Addr::new(192, 168, 1, 42), mask),
+                "{name} should not be offered to the phone"
+            );
+        }
+    }
+
+    /// The other half of the macOS rule, and the reason `bridge`/`ap` are **not** in the filter:
+    /// those are what Internet Sharing creates, and a phone on the Mac's own hotspot reaches the Mac
+    /// *through* them. Filtering by name would break the hotspot case in order to fix the Thunderbolt
+    /// one, so both are offered and the user chooses.
+    #[test]
+    fn a_macos_hotspot_or_shared_connection_is_still_offered() {
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        for name in ["en0", "bridge100", "bridge0", "ap1"] {
+            assert!(
+                is_lan_candidate(name, Ipv4Addr::new(192, 168, 2, 1), mask),
+                "{name} may be the network the phone is on and must be offered"
             );
         }
     }

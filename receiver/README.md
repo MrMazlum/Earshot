@@ -76,6 +76,14 @@ the icon. Those are in `trayui.rs`, `cable.rs` and `help.rs`, which compile and 
 platform — that file cannot be tested on the machine this is developed on, so nothing with logic in
 it is allowed to live there.
 
+**macOS uses `tray-icon`**, over an AppKit run loop driven by `objc2`. Unlike the Win32 notification
+area there is a maintained crate for the menu bar, so it is a dependency rather than hand-rolled
+code — but the crate needs an event loop running on the main thread, so `bin/tray.rs` drives
+`NSApplication` itself instead of pulling in `winit` for a program with no windows. The icon is
+coloured rather than a template image, so the four states are told apart the same way they are on
+Windows; the strings are still `trayui.rs`'s. When the virtual microphone is missing, the tray greys
+in a *Get BlackHole* entry, the macOS shape of the Windows tray's cable help.
+
 **Rust 1.75 is the minimum** — that is what `apt install cargo` gives on Ubuntu 24.04, and it is
 what this builds and tests against. The lockfile is kept at version 3 for the same reason; a newer
 cargo will silently rewrite it to version 4, which 1.75 then refuses to read. If you regenerate it
@@ -94,8 +102,9 @@ with a rustup toolchain, check `version = 3` is still the first entry before com
 | `audio.rs` | cpal output. Everything in the callback is allocation- and lock-free |
 | `virtualmic.rs` | the device Discord sees. Linux creates it (PipeWire null sink + remapped source); Windows cannot, and borrows one |
 | `cable.rs` | Windows only: which virtual cables are recognised, and the guided path when none is installed — detect, explain, open the vendor's page, wait for the cable to appear, carry on |
+| `blackhole.rs` | macOS only: the same for BlackHole, whose two ends share **one** name, unlike a Windows cable |
 | `engine.rs` | the receive loop, headless. Owns the thread and publishes `Status`; both front-ends read it. **Behaviour changes belong here**, not in a front-end. Also picks the address to show the phone — see below |
-| `autostart.rs` | the `~/.config/autostart` login item |
+| `autostart.rs` | the login item: `~/.config/autostart` on Linux, a registry value on Windows, `~/Library/LaunchAgents` on macOS |
 | `main.rs` | terminal front-end: the banner and the once-a-second stats line |
 | `bin/tray.rs` | tray front-end: icon, menu, tooltip |
 | `bin/record.rs` | **dev tool.** Writes what the phone sends to a wav and plays nothing, so audio can be captured on a machine with no sound card |
@@ -132,10 +141,28 @@ that:
 that closes before an error can be read, and inbound UDP dropped by the firewall, which from here is
 indistinguishable from a phone that is not sending.
 
+## On macOS
+
+macOS is built and tested in CI (`receiver (macos)`) and by hand on a Mac, so unlike the Windows
+target its gated code is not written blind. Two things are still worth knowing:
+
+- **Start at login** is a LaunchAgent in `~/Library/LaunchAgents`, written by `--install` or by the
+  menu bar's **Start at login** tick. There is no first-run login item, unlike Windows — see the note
+  at the top of `autostart.rs` for why
+- **The virtual microphone is BlackHole.** macOS cannot let a user program invent an audio endpoint,
+  so `--virtual-mic` looks for BlackHole and plays into it; see `blackhole.rs`. The device Earshot
+  opens and the device the user picks in Discord are **the same name** — BlackHole is a loopback, not
+  a two-ended cable. Missing it is reported the same guided way a missing VB-Cable is on Windows
+- **The tray is `tray-icon` over an AppKit run loop**, described above. It needs a graphical session,
+  so it will not run over SSH without one
+
 ## Not here yet
 
 - **A cleaning toggle in the tray menu.** `--clean` works and the phone's switch works; the tray has
   no tick for it yet, because it was written on a machine with no graphical session and an unseen
   menu is not a shipped menu.
+- **A signed, notarized macOS build.** The release is ad-hoc signed (`codesign --sign -`) so
+  Gatekeeper can be told to open it, but it is not notarized — that needs an Apple Developer account.
+  `xattr -dr com.apple.quarantine Earshot.app` is the workaround, and the README says so
 
-Opus decoding (needs `libopus-dev`), the PC → phone direction, discovery and encryption.
+The PC → phone direction, discovery and encryption.
