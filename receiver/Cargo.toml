@@ -81,19 +81,23 @@ features = [
 # `tray-icon` on macOS needs an AppKit event loop already running on the main thread before the
 # icon is created. The alternative to driving `NSApplication` ourselves is `winit`, which brings a
 # whole windowing stack this program has no other use for. `default-features = false` keeps it to
-# the handful of AppKit and Foundation items actually named — the run loop, a date, and the
-# application object. MIT, same as everything else here.
+# the handful of AppKit and Foundation items actually named — the run loop, a date, the application
+# object, the Help dialogs (`NSAlert`) and the pasteboard the address is copied to. MIT, same as
+# everything else here.
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "0.24", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
     "std",
+    "NSAlert",
     "NSApplication",
+    "NSPasteboard",
 ] }
 objc2-foundation = { version = "0.3", optional = true, default-features = false, features = [
     "std",
     "NSDate",
     "NSRunLoop",
+    "NSString",
 ] }
 
 [features]

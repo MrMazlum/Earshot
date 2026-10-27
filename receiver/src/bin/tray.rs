@@ -177,13 +177,16 @@ fn main() {
 /// and redraws once a second, the same shape as the Linux front-end's `while !QUIT { sleep; update }`.
 #[cfg(target_os = "macos")]
 mod macos {
-    use earshot::autostart;
     use earshot::engine::{self, Config, Engine, LanAddress};
     use earshot::trayui::{Snapshot, State, View};
+    use earshot::{autostart, blackhole, help};
 
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use objc2_foundation::{NSDate, NSRunLoop};
+    use objc2_app_kit::{
+        NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSPasteboard,
+        NSPasteboardTypeString,
+    };
+    use objc2_foundation::{NSDate, NSRunLoop, NSString};
 
     use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -209,6 +212,9 @@ mod macos {
     const ID_AUTOSTART: &str = "autostart";
     const ID_START_STOP: &str = "start-stop";
     const ID_GET_BLACKHOLE: &str = "get-blackhole";
+    const ID_COPY: &str = "copy-address";
+    const ID_QUICKSTART: &str = "quickstart";
+    const ID_TROUBLE: &str = "trouble";
     const ID_QUIT: &str = "quit";
 
     /// The tray's state. Shared with the menu handler; both run on the main thread, inside the run
@@ -341,9 +347,35 @@ mod macos {
                 }
             }
             ID_GET_BLACKHOLE => {
-                if let Err(e) = earshot::blackhole::open_download_page() {
+                if let Err(e) = blackhole::open_download_page() {
                     inner.error = Some(e);
                 }
+            }
+            ID_COPY => {
+                if let Some((ip, _port)) = inner.view().address() {
+                    copy_to_clipboard(&ip.to_string());
+                }
+            }
+            ID_QUICKSTART => {
+                // Name the device we are actually playing into; before the engine has started there
+                // is none, so name the one Earshot would look for.
+                let device = inner
+                    .snap
+                    .virtual_mic
+                    .clone()
+                    .unwrap_or_else(|| blackhole::KNOWN[0].device.to_string());
+                message("Using Earshot", &blackhole::quickstart(&device));
+            }
+            ID_TROUBLE => {
+                let port = if inner.snap.port > 0 {
+                    inner.snap.port
+                } else {
+                    engine::DEFAULT_PORT
+                };
+                message(
+                    "Nothing is arriving",
+                    &help::troubleshooting(port, help::Os::Macos),
+                );
             }
             ID_QUIT => QUIT.store(true, Ordering::Relaxed),
             _ => {}
@@ -373,7 +405,10 @@ mod macos {
     fn menu() -> (Menu, Items) {
         let status = MenuItem::with_id("status", "Stopped", false, None);
         let detail = MenuItem::with_id("detail", "Not running", false, None);
-        let address = MenuItem::with_id("address", "", false, None);
+        // Clickable, so clicking it copies the address — the one thing a user with a phone in the
+        // other hand actually wants, and the same trick the Windows tray plays. Both its text and
+        // whether it can be clicked are set each second in `redraw`.
+        let address = MenuItem::with_id(ID_COPY, "", false, None);
         let input = MenuItem::with_id("input", "", false, None);
         // Shown only when BlackHole is actually missing — see `redraw`. It is the tray's answer to
         // the one failure it can point at a fix for, the way the Windows tray's Help entry is.
@@ -383,6 +418,12 @@ mod macos {
             true,
             None,
         );
+        // The two Help dialogs, carrying the same text the Windows tray puts in a message box
+        // (`help.rs` and `blackhole.rs`). They earn their place more here than there: the tray has
+        // no terminal to print any of it to, so without them a `.app` user sees an error in the
+        // menu and has nowhere to go.
+        let quickstart = MenuItem::with_id(ID_QUICKSTART, "How do I use this?", true, None);
+        let trouble = MenuItem::with_id(ID_TROUBLE, "It is not working...", true, None);
         let virtual_mic =
             CheckMenuItem::with_id(ID_VIRTUAL_MIC, "Virtual microphone", true, true, None);
         let autostart = CheckMenuItem::with_id(ID_AUTOSTART, "Start at login", true, false, None);
@@ -402,11 +443,13 @@ mod macos {
             &input,
             &get_blackhole,
             &sep2,
+            &quickstart,
+            &trouble,
+            &sep3,
             &virtual_mic,
             &autostart,
-            &sep3,
-            &start_stop,
             &sep4,
+            &start_stop,
             &quit,
         ])
         .expect("building the menu");
@@ -435,7 +478,18 @@ mod macos {
 
         items.status.set_text(view.status_line());
         items.detail.set_text(view.detail_line());
-        items.address.set_text(view.address_line());
+        // The address row is only clickable when there is an address to copy — a stopped engine has
+        // not bound a port, so "copy" would copy the wrong thing.
+        match view.address() {
+            Some(_) => {
+                items.address.set_text(format!("{} (copy)", view.address_line()));
+                items.address.set_enabled(true);
+            }
+            None => {
+                items.address.set_text(view.address_line());
+                items.address.set_enabled(false);
+            }
+        }
         match view.input_line() {
             Some(text) => {
                 items.input.set_text(text);
@@ -474,6 +528,33 @@ mod macos {
     /// and the state would then live only in the text.
     fn icon_rgba(state: State) -> Vec<u8> {
         earshot::trayui::icon_rgba(ICON_PX as usize, state)
+    }
+
+    /// A modal dialog — the macOS twin of the Windows tray's message box.
+    ///
+    /// The words are [`help`]'s and [`blackhole`]'s, the same strings Windows shows, so the two
+    /// platforms cannot drift into telling people different things. `runModal` blocks until it is
+    /// dismissed, which is the point: it is answering a question the user just asked.
+    fn message(title: &str, body: &str) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let alert = NSAlert::new(mtm);
+        alert.setAlertStyle(NSAlertStyle::Informational);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(body));
+        alert.runModal();
+    }
+
+    /// Puts a string on the general pasteboard — what makes the address row's "(copy)" true.
+    fn copy_to_clipboard(text: &str) {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let value = NSString::from_str(text);
+        // SAFETY: `NSPasteboardTypeString` is a Foundation constant that lives for the whole
+        // program, and `setString:forType:` only reads from it and from `value`, both of which
+        // outlive the call.
+        let _ = pasteboard.setString_forType(&value, unsafe { NSPasteboardTypeString });
     }
 
     /// Runs the menu bar until the user quits. Returns the process exit code.
