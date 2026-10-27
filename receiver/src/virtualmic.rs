@@ -1,6 +1,6 @@
 //! The virtual microphone: making other applications see Earshot as an input device.
 //!
-//! This is the step that turns the project from a demo into something usable. The two platforms do
+//! This is the step that turns the project from a demo into something usable. The platforms do
 //! genuinely different things, and the difference is not cosmetic:
 //!
 //! - **Linux** can be *asked* to invent a device. A null sink plus a remapped source costs two
@@ -8,9 +8,13 @@
 //! - **Windows** cannot. Creating an audio endpoint needs a kernel driver, and shipping one needs a
 //!   signed WHQL package — hundreds of euros a year. So Windows borrows somebody else's: VB-Cable
 //!   is installed by the user, and Earshot plays into it.
+//! - **macOS** cannot either, for the same reason. It borrows BlackHole — but BlackHole is a
+//!   loopback rather than a cable with two ends, so here the device we open and the device the user
+//!   picks are the *same* string. See [`crate::blackhole`].
 //!
-//! Both paths end in the same shape, [`Devices`]: what *we* should open, and what the *user* should
-//! pick in Discord. Those are never the same string, which is the thing that confuses people.
+//! Every path ends in the same shape, [`Devices`]: what *we* should open, and what the *user* should
+//! pick in Discord. On Windows those are two different names, which is the thing that confuses
+//! people; on Linux and macOS there is one.
 
 /// The outcome of arranging a virtual microphone, whatever it took.
 pub struct Devices {

@@ -40,7 +40,7 @@ body:
       options:
         - Linux
         - Windows
-        - macOS (unsupported, but say so anyway)
+        - macOS
     validations:
       required: true
 
@@ -76,4 +76,5 @@ body:
       options:
         - label: Both devices are on the same Wi-Fi, and it is not a guest network
         - label: On Windows, added the inbound UDP firewall rule the receiver prints
-        - label: The input selected in Discord/OBS is the *recording* end of the cable (`CABLE Output`, not `CABLE Input`)
+        - label: On macOS, the firewall allows Earshot to accept incoming connections (or the firewall is off)
+        - label: The input selected in Discord/OBS is the one the receiver names — `CABLE Output` on Windows, `BlackHole 2ch` on macOS

@@ -313,4 +313,4 @@ jobs:
             artifacts/earshot-apk/earshot.apk \
             artifacts/earshot-receiver-linux-x86_64/*.tar.gz \
             artifacts/earshot-receiver-windows-x86_64/*.zip \
-            artifacts/earshot-receiver-macos-arm64/*.tar.gz
+            artifacts/earshot-receiver-macos-universal/*.tar.gz
