@@ -30,6 +30,8 @@ started.
 
 - macOS releases are **ad-hoc signed, not notarized** — Gatekeeper needs a nudge the first time, and
   the README says how
+- The macOS download is a **universal** binary — Apple silicon and Intel in one file, `lipo`ed from
+  two builds, so there is one download rather than one per Mac
 - New dependencies, all GPL-3.0-compatible: `tray-icon` (MIT OR Apache-2.0) for the menu bar, and
   `objc2`, `objc2-app-kit`, `objc2-foundation` (MIT) to drive the AppKit run loop it requires.
   They are macOS-only, so nothing changes for Linux or Windows builds

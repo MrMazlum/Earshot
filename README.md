@@ -13,7 +13,7 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 | 📱 **Phone** | [**earshot.apk**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot.apk) | Android. Sideload it — not on Play yet |
 | 🪟 **Windows** | [**earshot-receiver-windows-x86_64.zip**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-windows-x86_64.zip) | Also needs VB-Cable — free, once |
 | 🐧 **Linux** | [**earshot-receiver-linux-x86_64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-linux-x86_64.tar.gz) | Nothing else to install |
-| 🍎 **macOS** | [**earshot-receiver-macos-arm64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-macos-arm64.tar.gz) | Apple silicon. Also needs BlackHole — free, once |
+| 🍎 **macOS** | [**earshot-receiver-macos-universal.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-macos-universal.tar.gz) | Universal — Apple silicon and Intel. Also needs BlackHole — free, once |
 
 ## Quick start
 

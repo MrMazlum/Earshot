@@ -34,7 +34,7 @@ jobs:
             package: earshot-receiver-windows-x86_64
           - os: macos-latest
             label: macos
-            package: earshot-receiver-macos-arm64
+            package: earshot-receiver-macos-universal
     defaults:
       run:
         working-directory: receiver
@@ -67,6 +67,23 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --release --locked --all-targets -- -D warnings
+
+      # A universal binary, and the reason there is a second Rust target at all here: Linux and
+      # Windows ship one architecture each and get away with it, but both Apple silicon and Intel
+      # Macs are in use in 2026, and one download that runs on either is worth a second build. The
+      # Intel slice is built *on* the Apple-silicon runner (Xcode's SDK carries both) and the two
+      # are fused with `lipo` at packaging time. `cargo build` cannot emit a fat binary itself.
+      #
+      # Note this is the one thing about the macOS build that is not exercised on the machine this
+      # was written on: that Mac has no rustup and only the arm64 standard library, so the Intel
+      # slice is compiled here and nowhere else — the same position the Windows target is in.
+      - name: Add the Intel target (macOS)
+        if: runner.os == 'macOS'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build for Intel (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build --release --locked --target x86_64-apple-darwin
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -120,11 +137,22 @@ jobs:
         run: |
           dir="dist/${{ matrix.package }}"
           mkdir -p "$dir"
-          cp target/release/earshot-receiver target/release/earshot-tray "$dir/"
+          # One file per program with both slices inside. `cargo build` emitted an arm64 and an
+          # Intel build; `lipo -create` fuses them, and `lipo -archs` prints what went in — the only
+          # place the two architectures are still visible once they are one file.
+          lipo -create -output earshot-receiver \
+            target/release/earshot-receiver \
+            target/x86_64-apple-darwin/release/earshot-receiver
+          lipo -create -output earshot-tray \
+            target/release/earshot-tray \
+            target/x86_64-apple-darwin/release/earshot-tray
+          lipo -archs earshot-receiver
+          lipo -archs earshot-tray
+          cp earshot-receiver earshot-tray "$dir/"
           cp README.md ../LICENSE "$dir/"
           app="$dir/Earshot.app"
           mkdir -p "$app/Contents/MacOS"
-          cp target/release/earshot-tray "$app/Contents/MacOS/earshot-tray"
+          cp earshot-tray "$app/Contents/MacOS/earshot-tray"
           printf '%s\n' \
             '<?xml version="1.0" encoding="UTF-8"?>' \
             '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
