@@ -22,7 +22,7 @@ jobs:
     name: receiver (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
-      # One platform failing should not hide the other's result.
+      # One platform failing should not hide the others' results.
       fail-fast: false
       matrix:
         include:
@@ -32,6 +32,9 @@ jobs:
           - os: windows-latest
             label: windows
             package: earshot-receiver-windows-x86_64
+          - os: macos-latest
+            label: macos
+            package: earshot-receiver-macos-arm64
     defaults:
       run:
         working-directory: receiver
@@ -45,6 +48,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config
+
+      # macOS needs no headers — cpal uses CoreAudio and the tray uses AppKit, both from the
+      # runner's Xcode. The one thing not guaranteed is CMake, which `opusic-sys` drives to build
+      # libopus from source.
+      - name: Install CMake for libopus (macOS)
+        if: runner.os == 'macOS'
+        run: command -v cmake || brew install cmake
 
       # --locked throughout: the lockfile is deliberately kept at version 3 so the Rust that Ubuntu
       # ships (1.75) can still read it. Without this a newer cargo would quietly rewrite it to
@@ -92,6 +102,44 @@ jobs:
           (Get-Content windows/start-here.txt -Raw) -replace "`r`n", "`n" -replace "`n", "`r`n" |
             Set-Content -NoNewline -Path "$dir/START HERE.txt" -Encoding ascii
           Compress-Archive -Path $dir -DestinationPath dist/${{ matrix.package }}.zip
+
+      # The tray is the thing to double-click, so it ships as an app bundle — a bare binary opened
+      # from Finder would launch a Terminal window instead. `LSUIElement` keeps it out of the Dock
+      # and the app switcher, which is what makes it a menu-bar app; the code also sets the
+      # accessory activation policy, so the two agree.
+      #
+      # `codesign --sign -` is an *ad-hoc* signature: no identity and no notarization, but it leaves
+      # the bundle self-consistent so Gatekeeper will run it once the download's quarantine bit is
+      # cleared. Real notarization needs an Apple Developer account and is deliberately not done.
+      #
+      # The plist is written with printf rather than a heredoc so its indentation survives the
+      # round trip through YAML without guessing at the dedent. CRLF is not needed: nothing here is
+      # read by Notepad.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          dir="dist/${{ matrix.package }}"
+          mkdir -p "$dir"
+          cp target/release/earshot-receiver target/release/earshot-tray "$dir/"
+          cp README.md ../LICENSE "$dir/"
+          app="$dir/Earshot.app"
+          mkdir -p "$app/Contents/MacOS"
+          cp target/release/earshot-tray "$app/Contents/MacOS/earshot-tray"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict>' \
+            '    <key>CFBundleName</key><string>Earshot</string>' \
+            '    <key>CFBundleIdentifier</key><string>com.mazlum.earshot</string>' \
+            '    <key>CFBundleExecutable</key><string>earshot-tray</string>' \
+            '    <key>CFBundlePackageType</key><string>APPL</string>' \
+            '    <key>CFBundleShortVersionString</key><string>1.0.0</string>' \
+            '    <key>LSUIElement</key><true/>' \
+            '</dict>' \
+            '</plist>' > "$app/Contents/Info.plist"
+          codesign --force --sign - "$app"
+          tar -czf "dist/${{ matrix.package }}.tar.gz" -C dist "${{ matrix.package }}"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -236,4 +284,5 @@ jobs:
             --generate-notes \
             artifacts/earshot-apk/earshot.apk \
             artifacts/earshot-receiver-linux-x86_64/*.tar.gz \
-            artifacts/earshot-receiver-windows-x86_64/*.zip
+            artifacts/earshot-receiver-windows-x86_64/*.zip \
+            artifacts/earshot-receiver-macos-arm64/*.tar.gz
