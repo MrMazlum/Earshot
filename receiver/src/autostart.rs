@@ -1,8 +1,16 @@
 //! Starting the tray at login.
 //!
-//! Both platforms do the same two things — put the binary somewhere that will still exist next
+//! All three platforms do the same two things — put the binary somewhere that will still exist next
 //! week, then tell the session to run it — and disagree only about where the second half is
-//! recorded. Linux writes a `.desktop` file; Windows writes a registry value.
+//! recorded. Linux writes a `.desktop` file, Windows a registry value, macOS a LaunchAgent `.plist`.
+//!
+//! ⚠️ **Nothing here creates a login item on its own except Windows, and that is deliberate.** The
+//! Windows tray installs itself on the first run because the user launched a bare `.exe` with no
+//! terminal in which to pass `--install` — there was no other way the login item could ever be set.
+//! macOS now ships a double-clickable bundle too, so the same argument could be made, but it has a
+//! menu bar with a *Start at login* tick, and adding a persistent login item without being asked is
+//! precisely the sort of thing this program promises not to do. Linux and macOS therefore both
+//! require the user to ask — with `--install` or with the tick — and only Windows assumes.
 //!
 //! ⚠️ The login item points at a **copy of the binary**, never at wherever it happened to be run
 //! from. An entry pointing into `target/release/` breaks the first time anyone runs `cargo clean`,

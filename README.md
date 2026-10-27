@@ -386,8 +386,12 @@ arriving. `--uninstall` removes the login item.
 
 On Windows the same binary ships as `Earshot.exe` and does this by itself: the first time it runs it
 copies itself into `%LOCALAPPDATA%\Earshot` and adds a `HKCU\...\Run` entry, the way Discord and
-Spotify do, so `--install` is only needed on Linux. First run only — untick "Start at login" in the
-menu and it stays unticked.
+Spotify do. First run only — untick "Start at login" in the menu and it stays unticked.
+
+On Linux and on macOS nothing is added until you ask: run `--install`, or tick **Start at login** in
+the menu bar icon. Windows assumes, because it is the one platform where the user launches a bare
+binary with no terminal in which to pass a flag; macOS and Linux have somewhere to put the question,
+so they ask it instead of answering it for you.
 
 On GNOME this needs the AppIndicator extension — Ubuntu turns it on by default.
 

@@ -584,6 +584,10 @@ mod macos {
             }
         };
 
+        // No first-run login item here, unlike the Windows tray — see the note at the top of
+        // `earshot::autostart` for why. The menu bar's own "Start at login" tick is how a macOS user
+        // asks, and `--install` still works from a terminal.
+        //
         // Menu clicks. `set_event_handler` fires on the main thread while the run loop is pumped, so
         // it and `redraw` never touch the state at the same time.
         {

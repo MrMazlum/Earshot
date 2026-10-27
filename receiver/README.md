@@ -146,6 +146,9 @@ indistinguishable from a phone that is not sending.
 macOS is built and tested in CI (`receiver (macos)`) and by hand on a Mac, so unlike the Windows
 target its gated code is not written blind. Two things are still worth knowing:
 
+- **Start at login** is a LaunchAgent in `~/Library/LaunchAgents`, written by `--install` or by the
+  menu bar's **Start at login** tick. There is no first-run login item, unlike Windows — see the note
+  at the top of `autostart.rs` for why
 - **The virtual microphone is BlackHole.** macOS cannot let a user program invent an audio endpoint,
   so `--virtual-mic` looks for BlackHole and plays into it; see `blackhole.rs`. The device Earshot
   opens and the device the user picks in Discord are **the same name** — BlackHole is a loopback, not
