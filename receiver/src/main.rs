@@ -7,6 +7,7 @@
 //! applications see the phone as an input device.
 
 use earshot::audio;
+use earshot::blackhole;
 use earshot::cable;
 use earshot::engine::{self, Config, Engine};
 use earshot::help;
@@ -72,11 +73,13 @@ VIRTUAL MICROPHONE:
              it looks for VB-Cable and, if none is installed, offers to open the
              download page and then waits for it. Earshot plays into 'CABLE Input';
              you pick 'CABLE Output' as your microphone.
+    macOS    borrows BlackHole, for the same reason. Earshot plays into it and you pick
+             the same device - the two ends share one name, unlike Windows.
 
 TIP:
     earshot-tray puts all of this in the system tray instead, with no terminal at all,
-    and can start at login. It works on Linux and on Windows, where it is shipped as
-    Earshot.exe.
+    and can start at login. It works on Linux, Windows and macOS, where on Windows it
+    is shipped as Earshot.exe.
 ";
 
 fn parse_args() -> Result<Args, String> {
@@ -124,10 +127,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn print_nothing_arriving_hint(port: u16) {
-    println!(
-        "{}",
-        help::nothing_arriving_hint(port, cfg!(target_os = "windows"))
-    );
+    println!("{}", help::nothing_arriving_hint(port, help::Os::current()));
 }
 
 /// Prints and exits — but on Windows, waits first.
@@ -157,11 +157,16 @@ fn main() {
         let name = &args.config.virtual_mic_name;
         match earshot::virtualmic::remove(name) {
             Ok(true) => println!("Removed the virtual microphone '{name}'."),
-            // Only Linux has a device of its own to take away. On Windows the cable belongs to
-            // VB-Cable, and saying "none was loaded" would imply Earshot had failed at something.
+            // Only Linux has a device of its own to take away. On Windows the cable and on macOS
+            // BlackHole belong to their own installers, and saying "none was loaded" would imply
+            // Earshot had failed at something.
             Ok(false) if cfg!(target_os = "windows") => println!(
                 "Nothing to remove. On Windows the virtual microphone is the cable's, not \
                  Earshot's - uninstall VB-Cable through Windows if you want it gone."
+            ),
+            Ok(false) if cfg!(target_os = "macos") => println!(
+                "Nothing to remove. On macOS the virtual microphone is BlackHole, not \
+                 Earshot's - uninstall BlackHole if you want it gone."
             ),
             Ok(false) => println!("No virtual microphone called '{name}' was loaded."),
             Err(e) => die(&format!("error: {e}"), 1),
@@ -187,10 +192,13 @@ fn run(config: Config) -> Result<(), String> {
 
     println!("Earshot receiver");
     // Before the engine, not inside it: this may print pages of guidance and read from stdin, and
-    // the engine's setup path runs on the receive thread where neither belongs. On success a cable
-    // now exists, so the engine's own lookup cannot fail. No-op off Windows.
+    // the engine's setup path runs on the receive thread where neither belongs. On success the
+    // borrowed device now exists, so the engine's own lookup cannot fail. Each is a no-op off its
+    // own platform, so calling both is harmless and keeps this branch from having to know which one
+    // matters.
     if config.virtual_mic {
         cable::preflight()?;
+        blackhole::preflight()?;
     }
     let engine = Engine::start(config)?;
     let ready = engine.ready().clone();
@@ -244,6 +252,13 @@ fn run(config: Config) -> Result<(), String> {
         if cfg!(target_os = "linux") {
             println!("  It survives restarts of this program. Remove it with:");
             println!("      earshot-receiver --remove-virtual-mic");
+        } else if cfg!(target_os = "macos") {
+            // BlackHole is one loopback device with one name, so the thing we play into and the
+            // thing the user records from are the same - there is no back-to-front pair to warn
+            // about, and saying so saves the Windows-shaped confusion.
+            println!("  That is BlackHole's name, not Earshot's - macOS will not let a program");
+            println!("  invent a microphone. Earshot plays into it and you record from the very");
+            println!("  same device, so there is only one name to remember.");
         } else {
             // The name is VB-Audio's, not ours, and "why is it not called Earshot" is the first
             // thing every Windows user asks. Answer it before they have to.

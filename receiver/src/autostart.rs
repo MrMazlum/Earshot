@@ -279,6 +279,116 @@ mod platform {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod platform {
+    //! A LaunchAgent: an XML `.plist` in `~/Library/LaunchAgents/`. The session reads every plist
+    //! there at login and starts the program its `ProgramArguments` names. No root, no `launchctl`
+    //! call for the login case — writing the file *is* the whole of it, the way writing the
+    //! `.desktop` file is the whole of it on Linux.
+    //!
+    //! ⚠️ The login item points at a **copy of the binary**, never at wherever it happened to be run
+    //! from — see the note at the top of this module. `~/Library/Application Support` rather than
+    //! `~/Library/Application Scripts` or a `.app` bundle: Earshot ships as a plain binary, and the
+    //! tray sets its own activation policy so it needs no bundle to stay out of the Dock.
+
+    use super::{install_binary, Installed};
+    use std::path::{Path, PathBuf};
+
+    const PLIST: &str = "com.mazlum.earshot.plist";
+    pub const LABEL: &str = "com.mazlum.earshot";
+    pub const BIN_NAME: &str = "earshot-tray";
+
+    fn home() -> Result<PathBuf, String> {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "HOME is not set, so there is nowhere to install to".to_string())
+    }
+
+    pub fn plist_file() -> Result<PathBuf, String> {
+        Ok(home()?.join("Library").join("LaunchAgents").join(PLIST))
+    }
+
+    pub fn installed_binary() -> Result<PathBuf, String> {
+        Ok(home()?
+            .join("Library")
+            .join("Application Support")
+            .join("Earshot")
+            .join(BIN_NAME))
+    }
+
+    pub fn is_enabled() -> bool {
+        plist_file().map(|p| p.exists()).unwrap_or(false)
+    }
+
+    pub fn enable(extra_args: &str) -> Result<Installed, String> {
+        let target = installed_binary()?;
+        install_binary(&target)?;
+
+        let plist = plist_file()?;
+        if let Some(dir) = plist.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        }
+        std::fs::write(&plist, entry(&target, extra_args))
+            .map_err(|e| format!("cannot write {}: {e}", plist.display()))?;
+
+        Ok(Installed {
+            binary: target,
+            entry: plist.display().to_string(),
+        })
+    }
+
+    /// The copied binary is left alone — it may well be the one running.
+    pub fn disable() -> Result<bool, String> {
+        let plist = plist_file()?;
+        match std::fs::remove_file(&plist) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(format!("cannot remove {}: {e}", plist.display())),
+        }
+    }
+
+    /// Escapes a value about to go inside `<string>`. A home directory is allowed to contain `&` or
+    /// `<`, and an unescaped one produces a plist the session refuses to parse — which then fails
+    /// *at login*, with nowhere to print the reason.
+    fn escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    /// The `<string>` elements of `ProgramArguments`: the binary, then whatever arguments the run was
+    /// started with, one element each exactly as a shell would have split them.
+    fn program_arguments(bin: &Path, extra_args: &str) -> String {
+        let mut parts = vec![bin.display().to_string()];
+        parts.extend(extra_args.split_whitespace().map(str::to_string));
+        parts
+            .iter()
+            .map(|p| format!("\t\t<string>{}</string>\n", escape(p)))
+            .collect()
+    }
+
+    pub fn entry(bin: &Path, extra_args: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n\
+             <dict>\n\
+             \t<key>Label</key>\n\
+             \t<string>{LABEL}</string>\n\
+             \t<key>ProgramArguments</key>\n\
+             \t<array>\n\
+             {}\t</array>\n\
+             \t<key>RunAtLoad</key>\n\
+             \t<true/>\n\
+             </dict>\n\
+             </plist>\n",
+            program_arguments(bin, extra_args)
+        )
+    }
+}
+
 /// The command a login item runs: a quoted path, then any extra arguments.
 ///
 /// Quoting is not optional. The default install path contains the user's name, and
@@ -387,6 +497,69 @@ mod tests {
         fn extra_arguments_land_outside_the_quotes() {
             let line = command_line(Path::new(r"C:\a b\earshot-tray.exe"), "--no-virtual-mic");
             assert_eq!(line, r#""C:\a b\earshot-tray.exe" --no-virtual-mic"#);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos {
+        use crate::autostart::platform::{entry, plist_file, LABEL};
+        use std::path::Path;
+
+        #[test]
+        fn the_entry_is_a_valid_launch_agent() {
+            let e = entry(Path::new("/Users/x/bin/earshot-tray"), "");
+            assert!(e.starts_with("<?xml version=\"1.0\""), "{e}");
+            assert!(e.contains("<plist version=\"1.0\">"), "{e}");
+            assert!(e.contains(&format!("<string>{LABEL}</string>")), "{e}");
+            assert!(e.contains("<key>RunAtLoad</key>"), "{e}");
+            assert!(e.contains("<true/>"), "{e}");
+            assert!(e.ends_with("</plist>\n"), "{e}");
+        }
+
+        /// The binary has to be the first `ProgramArguments` entry, or the session launches the
+        /// wrong thing — or nothing.
+        #[test]
+        fn the_binary_is_the_first_program_argument() {
+            let e = entry(Path::new("/Users/x/bin/earshot-tray"), "");
+            let args = e
+                .split("<array>")
+                .nth(1)
+                .and_then(|s| s.split("</array>").next())
+                .expect("an array");
+            let first = args.split("<string>").nth(1).expect("a first string");
+            assert!(
+                first.starts_with("/Users/x/bin/earshot-tray</string>"),
+                "{args}"
+            );
+        }
+
+        #[test]
+        fn extra_arguments_become_their_own_string_elements() {
+            let e = entry(Path::new("/Users/x/bin/earshot-tray"), "--no-virtual-mic");
+            assert!(e.contains("<string>--no-virtual-mic</string>"), "{e}");
+        }
+
+        /// A home directory may contain `&`, and an unescaped one is a plist the session silently
+        /// refuses — at login, where nobody sees the error.
+        #[test]
+        fn a_home_directory_with_an_ampersand_survives() {
+            let e = entry(Path::new("/Users/a&b/earshot-tray"), "");
+            assert!(
+                e.contains("<string>/Users/a&amp;b/earshot-tray</string>"),
+                "{e}"
+            );
+            assert!(!e.contains("a&b"), "an unescaped ampersand slipped through: {e}");
+        }
+
+        /// The plist has to land where the session looks for login items, or writing it achieves
+        /// nothing at all.
+        #[test]
+        fn the_entry_lives_in_launch_agents() {
+            let p = plist_file().expect("HOME is set in tests");
+            assert!(
+                p.ends_with("Library/LaunchAgents/com.mazlum.earshot.plist"),
+                "{p:?}"
+            );
         }
     }
 }

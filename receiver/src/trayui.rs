@@ -324,6 +324,19 @@ pub fn icon_pixels(size: usize, state: State) -> Vec<u8> {
     pixels
 }
 
+/// The same icon in **RGBA**, which is what `tray_icon::Icon::from_rgba` wants.
+///
+/// [`icon_pixels`] is BGRA because a Win32 32-bit DIB section is, and Windows is the only caller
+/// that hands the buffer straight to the OS. The macOS and Linux tray back-ends both want RGBA, so
+/// the swap lives here rather than in each of them.
+pub fn icon_rgba(size: usize, state: State) -> Vec<u8> {
+    let mut pixels = icon_pixels(size, state);
+    for pixel in pixels.chunks_mut(4) {
+        pixel.swap(0, 2);
+    }
+    pixels
+}
+
 /// The microphone glyph, in a unit square. `true` where the icon is opaque.
 ///
 /// Deliberately chunky: this is read at 16 px, where a faithful drawing of a microphone turns into
@@ -575,6 +588,21 @@ mod tests {
     fn the_icon_is_the_size_it_was_asked_for_and_fully_bgra() {
         for size in [16usize, 32, 64] {
             assert_eq!(icon_pixels(size, State::Waiting).len(), size * size * 4);
+        }
+    }
+
+    /// The trays that are not Win32 want RGBA, and getting the swap wrong is a blue icon that
+    /// tests as "drawn" - so it is checked against the BGRA form rather than merely for shape.
+    #[test]
+    fn the_rgba_icon_is_the_bgra_one_with_the_channels_swapped() {
+        let bgra = icon_pixels(32, State::Connected);
+        let rgba = icon_rgba(32, State::Connected);
+        assert_eq!(rgba.len(), bgra.len());
+        for (b, r) in bgra.chunks(4).zip(rgba.chunks(4)) {
+            assert_eq!(b[0], r[2], "blue moved to the wrong place");
+            assert_eq!(b[2], r[0], "red moved to the wrong place");
+            assert_eq!(b[1], r[1]);
+            assert_eq!(b[3], r[3]);
         }
     }
 

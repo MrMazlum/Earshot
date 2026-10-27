@@ -433,7 +433,7 @@ impl App {
                 };
                 self.message(
                     "Nothing is arriving",
-                    &help::troubleshooting(port, true),
+                    &help::troubleshooting(port, help::Os::Windows),
                     MB_OK | MB_ICONINFORMATION,
                 );
             }

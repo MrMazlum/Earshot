@@ -72,11 +72,43 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+# The macOS menu-bar icon. `tray-icon` (by tauri-apps) wraps `NSStatusItem` and its menu — the
+# macOS equivalent of `ksni` on Linux and of `wintray.rs` on Windows, but a dependency rather than
+# something hand-rolled, because unlike the Win32 notification area there is a maintained crate for
+# it. MIT OR Apache-2.0, so it sits fine beside this GPL-3.0 program.
+#
+# `objc2` and the two Apple framework bindings are here for the *run loop*, not the icon:
+# `tray-icon` on macOS needs an AppKit event loop already running on the main thread before the
+# icon is created. The alternative to driving `NSApplication` ourselves is `winit`, which brings a
+# whole windowing stack this program has no other use for. `default-features = false` keeps it to
+# the handful of AppKit and Foundation items actually named — the run loop, a date, and the
+# application object. MIT, same as everything else here.
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "0.24", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = [
+    "std",
+    "NSApplication",
+] }
+objc2-foundation = { version = "0.3", optional = true, default-features = false, features = [
+    "std",
+    "NSDate",
+    "NSRunLoop",
+] }
+
 [features]
 default = ["tray"]
 # Each `dep:` is target-gated above, so this activates whichever one exists for the platform being
-# built and neither on, say, macOS.
-tray = ["dep:ksni", "dep:windows-sys"]
+# built and none of them on, say, a BSD. macOS uses `tray-icon`; Linux `ksni`; Windows the
+# hand-rolled `wintray.rs`. Exactly one is ever non-empty.
+tray = [
+    "dep:ksni",
+    "dep:windows-sys",
+    "dep:tray-icon",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
+]
 
 [profile.release]
 opt-level = 3

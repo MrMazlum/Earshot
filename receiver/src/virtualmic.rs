@@ -178,13 +178,55 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+mod platform {
+    //! macOS cannot invent an audio endpoint either, so Earshot borrows BlackHole — a loopback whose
+    //! input is fed from its own output. Unlike the Windows cable the two ends share **one name**,
+    //! so the device we open and the device the user picks in Discord are the same string; that is
+    //! the only thing that differs from [`crate::cable`] on Windows. See [`crate::blackhole`].
+    //!
+    //! Nothing is created and nothing is removed: BlackHole belongs to its own installer.
+
+    use super::Devices;
+
+    pub fn ensure(_name: &str) -> Result<Devices, String> {
+        match crate::blackhole::find()? {
+            Some(found) => Ok(Devices {
+                // The same device in both fields, on purpose: what we open is the loopback, and the
+                // user picks that same loopback as their microphone.
+                device_hint: found.device.clone(),
+                display: found.device,
+                // BlackHole is installed, not created by us, so it is never "new".
+                created: false,
+            }),
+            // `blackhole::preflight` normally gets there first and offers to fix this, so reaching
+            // here means the tray or a non-interactive run hit it. The message still has to stand
+            // alone.
+            None => Err(crate::blackhole::missing_message(
+                &crate::audio::output_device_names().unwrap_or_default(),
+            )),
+        }
+    }
+
+    pub fn clear_routing() {}
+
+    /// Nothing to remove — BlackHole is its vendor's, and uninstalling it is that installer's job.
+    pub fn remove(_name: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+)))]
 mod platform {
     use super::Devices;
 
     pub fn ensure(_name: &str) -> Result<Devices, String> {
         Err("Earshot's virtual microphone is not implemented on this platform yet. \
-             On macOS, install BlackHole and point Earshot at it with --device."
+             Linux, Windows and macOS are; point Earshot at an output device with --device."
             .to_string())
     }
 
