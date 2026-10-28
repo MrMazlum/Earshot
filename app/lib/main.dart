@@ -37,7 +37,7 @@ void main() => runApp(const EarshotApp());
 ///
 /// ⚠️ Kept in step with `pubspec.yaml` by `test/version_test.dart`, because a version string that
 /// has to be edited in two places is a version string that is wrong in one of them.
-const appVersion = '1.0.0';
+const appVersion = '1.1.0';
 
 /// What the rename dialog returns when its Forget button was the one pressed. A name nobody can
 /// type, because every other string that comes back is a name.

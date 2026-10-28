@@ -4,7 +4,7 @@ Notable changes, newest first. Releases before 0.2.0 are on the
 [releases page](https://github.com/MrMazlum/Earshot/releases); this file starts where it was
 started.
 
-## Unreleased
+## 1.1.0
 
 ### Added
 
