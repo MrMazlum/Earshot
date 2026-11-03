@@ -1,0 +1,56 @@
+name: Idea
+description: Something Earshot should do and does not
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Read this first — it will save you writing a long one for nothing.**
+
+        Earshot is a microphone, and only a microphone. Audio goes phone → PC and never the
+        other way: sending the call back to the phone makes it a headset, which is a different
+        program with a different latency budget. That one is not in a queue, it is out of scope.
+
+        Two other things are decided and not open:
+
+        - **150 ms glass-to-glass is a hard cap.** Anything that buffers has to say what it costs
+          in milliseconds, and "it is only a little" is not a number
+        - **Audio never leaves your network.** No relay, no account, no cloud — so nothing that
+          needs a server of ours is going to happen
+
+        Everything else is fair game, including ideas that make the existing thing smaller.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The situation, not the solution. "I use two PCs and retyping the address is tedious" tells
+        us more than "add a dropdown", because the second one might not be the best answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you think should happen
+    validations:
+      required: true
+
+  - type: dropdown
+    id: side
+    attributes:
+      label: Which half
+      options:
+        - The phone app
+        - The PC receiver
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today instead
+      description: Optional. If there is a workaround, saying so is useful — it sets the priority.

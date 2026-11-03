@@ -49,7 +49,7 @@ body:
     attributes:
       label: Earshot version
       description: The release tag you downloaded, or the commit if you built it yourself.
-      placeholder: v0.1.1
+      placeholder: v1.1.0
     validations:
       required: true
 
