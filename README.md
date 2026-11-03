@@ -6,8 +6,6 @@
 
 Free, open source, no ads, no account, no cloud. Nothing ever leaves your home network.
 
-<img src="docs/demo.gif" alt="The phone app: a PC picked from the remembered list, Start pressed, and the screen it collapses to once the PC is answering — a ring that follows your voice" width="232" align="right">
-
 ## Download
 
 | | File | |
@@ -18,6 +16,8 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 | 🍎 **macOS** | [**earshot-receiver-macos-universal.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-macos-universal.tar.gz) | Universal — Apple silicon and Intel. Also needs BlackHole — free, once |
 
 ## Quick start
+
+<img src="docs/demo.gif" alt="The phone app: a PC picked from the remembered list, Start pressed, and the screen it collapses to once the PC is answering — a ring that follows your voice" width="232" align="right">
 
 ### 🪟 Windows
 
