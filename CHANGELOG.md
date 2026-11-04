@@ -8,7 +8,8 @@ started.
 
 ### Added
 
-- **macOS support.** The receiver builds, tests and ships on macOS, and now does what the other two
+- **macOS support, contributed by [Uluhan Şimşek](https://github.com/uluhansmsk)** ([#1](https://github.com/MrMazlum/Earshot/pull/1)).
+  The receiver builds, tests and ships on macOS, and now does what the other two
   platforms do: plays the phone through the sound card, into a **BlackHole** virtual microphone so
   Discord and Zoom see it as an input, sits in the **menu bar** as a tray icon, and can **start at
   login** (a LaunchAgent in `~/Library/LaunchAgents`). The audio core — cpal over CoreAudio, libopus,

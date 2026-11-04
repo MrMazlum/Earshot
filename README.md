@@ -433,6 +433,16 @@ and about not committing your own IP address. Writing another client? Everything
 
 Found a security problem? Please report it privately — see [SECURITY.md](SECURITY.md).
 
+## Contributors
+
+Named for what they did, because a contributor list that is only names makes porting a platform look
+the same size as fixing a typo.
+
+| | |
+|---|---|
+| **[Uluhan Şimşek](https://github.com/uluhansmsk)** | **macOS support** — the whole platform, in one piece of work: the menu-bar tray, the BlackHole virtual microphone and the guided path to installing it, start-at-login as a LaunchAgent, the three-platform help text, and the universal binary in CI. 18 files. The audio core needed no changes; everything around it did |
+| **[Mazlum](https://github.com/MrMazlum)** | everything else — the phone app, the wire protocol, the receiver, the Windows and Linux sides |
+
 ## Licence
 
 GPL-3.0. Published after the security review recorded in
