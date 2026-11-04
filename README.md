@@ -458,6 +458,7 @@ the same size as fixing a typo.
 |---|---|
 | **[Uluhan Şimşek](https://github.com/uluhansmsk)** | **macOS support** — the whole platform, in one piece of work: the menu-bar tray, the BlackHole virtual microphone and the guided path to installing it, start-at-login as a LaunchAgent, the three-platform help text, and the universal binary in CI. 18 files. The audio core needed no changes; everything around it did |
 | **[Mazlum](https://github.com/MrMazlum)** | everything else — the phone app, the wire protocol, the receiver, the Windows and Linux sides |
+| **[agenticsymphony-tech](https://github.com/agenticsymphony-tech)** | the README's *What the noise removal is* section ([#7](https://github.com/MrMazlum/Earshot/pull/7)) — written from the facts listed in [#5](https://github.com/MrMazlum/Earshot/issues/5). Automated, and it says so |
 
 ## Licence
 
