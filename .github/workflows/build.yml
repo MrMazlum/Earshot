@@ -6,10 +6,27 @@ name: build
 # This workflow is not a nicety: the Windows receiver is written on a Linux laptop with no
 # cross-compiler, so **this is the only thing that compiles it**. If the Windows job goes red, the
 # Windows build is broken — there is no local check that would have caught it first.
+#
+# ⚠️ Prose does not build. A push that only touches documentation is skipped, because four jobs and
+# twenty minutes on a README edit teaches the eye to ignore the status dot - which is the one thing
+# this workflow exists to be trusted about. Three deliberate limits on that:
+#
+#   · `pull_request` is NOT filtered. A skipped run leaves a required check pending forever, and
+#     the macOS support arrived as a pull request, so that path must keep building.
+#   · Tags are NOT filtered. A release builds everything, always.
+#   · It is a BLOCKLIST, never an allowlist. Anything new builds by default - it fails toward doing
+#     the work. One "docs" commit here also touched app test code; an allowlist would have skipped
+#     a real change in silence.
+#
+# `.github/workflows/**` is deliberately absent from the list: a change to this file must run it.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   pull_request:
   workflow_dispatch:
 
