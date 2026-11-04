@@ -97,6 +97,22 @@ with a different latency budget; it is deliberately out of scope rather than wai
 
 Everything below is here when you need it. You should not need it to get started.
 
+## What the noise removal is
+
+The `noise removal` step in the diagram is **DeepFilterNet 3**, a noise-suppression model, and it
+runs on the **PC**, not on the phone.
+
+- **It is on by default.** The phone's own noise cleaner was removed after a keyboard could still be
+  heard through it, so the PC does the cleaning instead
+- **It costs about 20 ms** of delay. There is also a low-latency model that adds no delay and
+  cleans a little less
+- **It only applies to 48 kHz streams.** A 16 kHz stream comes from the phone's own call audio
+  chain, which already cleans itself, so it is passed through untouched
+- **The phone can switch it off mid-session**, and back on, while you are talking. `--clean off`
+  on the PC overrides whatever the phone asks for
+
+`earshot-receiver --help` has the full account.
+
 ## Installing VB-Cable, exactly which file
 
 Windows will not let a program invent a microphone — that needs a driver signed by Microsoft — so
