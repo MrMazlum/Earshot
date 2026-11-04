@@ -30,15 +30,41 @@ if-addrs = "0.13"
 # byte-stable (measured — two hashes for one URL), and a cargo git dependency resolves a rev
 # reproducibly where a tag can be moved.
 #
+# 🔴 IT IS OUR OWN FORK SINCE 2026-11-04, AND IT HAD TO BE. `tract` below 0.21.16 carries two
+# advisories that fire on model load — CVE-2026-55832 (path traversal through an ONNX
+# `external_data` location) and CVE-2026-55093 (an integer overflow in the NNEF tensor parser) —
+# and every road to a fixed version was measured and closed:
+#
+#   · the old rev (978576aa, v0.5.6) asks for `tract ^0.19.4`, and 0.19.16 is the last 0.19 there
+#     will ever be. Both advisories, no fix, forever.
+#   · upstream's own `main` asks for `^0.21.4` and DOES NOT BUILD against today's crates.io at all:
+#     `tract` moved to `ndarray 0.16` at 0.21.7, so its calls mix two incompatible `ndarray`s.
+#     Pinning `tract` low enough to compile lands at 0.21.6 — below both fixes.
+#   · `[patch.crates-io]` cannot help: the mismatch is inside DeepFilterNet's own source.
+#
+# ⚠️ Upstream has been dead since 2024-09-25, so there is no release to wait for. The fork is
+# upstream's `main` plus ONE commit of 19 lines in 4 files: the dependency bounds, a field `tract`
+# renamed, `into_shape` → `into_shape_with_order` (the same behaviour, written out, since
+# `ndarray 0.16` deprecated the ambiguous form), and four explicit lifetimes a current rustc asks
+# for. Nothing else.
+#
+# 🔴 THE FORK MUST NOT BE DELETED — this line is what every build downloads. And the audio was
+# measured, not assumed: the same 6-second file through the cleaner before and after differs in
+# **23 samples of 288,000, each by 1 of 32,768**, with the same noise floor, the same 20 ms
+# lookahead and the same throughput. `EarshotBrain/Logs/2026-11-04-the-tract-port.md` holds the
+# numbers and the patch.
+#
 # `tract` is a pure-Rust ONNX runtime, so this adds no C++ and nothing to the Windows build beyond
 # more Rust. `default-features = false` drops the audio-file readers and the dataset machinery,
 # which are for training and have no business in a receiver.
 #
 # MIT/Apache-2.0, code and weights both, which sits fine beside this GPL-3.0 program.
-deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "978576aa8400552a4ce9730838c635aa30db5e61", default-features = false, features = ["tract", "default-model"] }
+deep_filter = { git = "https://github.com/MrMazlum/DeepFilterNet", rev = "8c03d80f844f40d8b0341aeb7f8e6f092353c5ac", default-features = false, features = ["tract", "default-model"] }
 # Only for the two array views DeepFilterNet's `process` takes. Pinned to the same major as the one
-# `deep_filter` resolves, or the types are different types with the same name.
-ndarray = "0.15"
+# `deep_filter` resolves, or the types are different types with the same name — which is exactly
+# what broke when `tract` moved to 0.16 and the fork had to follow. ⚠️ Move this only together with
+# the fork's own `ndarray` bound.
+ndarray = "0.16"
 
 # The tray icon, Linux only. `ksni` speaks StatusNotifierItem over D-Bus directly, in Rust — which
 # is why it is preferred over `tray-icon`/`libappindicator`: those need
