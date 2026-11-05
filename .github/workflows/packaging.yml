@@ -1,0 +1,88 @@
+name: packaging
+
+# Tags build the Linux distro artifacts and attach them to the same GitHub
+# release the tarballs go to. Branch pushes only validate the scripts and
+# PKGBUILDs (no cargo build), so packaging edits stay cheap to iterate on.
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "install.sh"
+      - "packaging/**"
+      - "receiver/Cargo.toml"
+      - ".github/workflows/packaging.yml"
+  pull_request:
+    paths:
+      - "install.sh"
+      - "packaging/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate scripts and PKGBUILDs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Shell syntax check
+        run: |
+          sh -n install.sh
+          bash -n packaging/build-deb.sh
+          bash -n packaging/build-rpm.sh
+          bash -n packaging/build-appimage.sh
+          bash -n packaging/AppRun
+          bash -n packaging/aur/earshot-git/PKGBUILD
+          bash -n packaging/aur/earshot-bin/PKGBUILD
+
+      - name: Version single-source check
+        run: |
+          ver=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' receiver/Cargo.toml | head -1)
+          echo "Cargo.toml version: $ver"
+          grep -q "^Version: *$ver" packaging/earshot.spec || (echo "::error::earshot.spec Version desynced from Cargo.toml ($ver)"; exit 1)
+          grep -q "^pkgver=$ver" packaging/aur/earshot-bin/PKGBUILD || (echo "::error::earshot-bin PKGBUILD desynced from Cargo.toml ($ver)"; exit 1)
+          grep -q "^	pkgver = $ver" packaging/aur/earshot-bin/.SRCINFO || (echo "::error::earshot-bin .SRCINFO desynced from Cargo.toml ($ver)"; exit 1)
+
+  build:
+    name: build linux packages
+    # Full cargo build only on tags (and manual runs). Branch/PR runs stop
+    # after validate above.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install build and pack deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libdbus-1-dev pkg-config cmake rpm file desktop-file-utils
+
+      - name: Build the binaries once
+        run: cargo build --release --locked
+        working-directory: receiver
+
+      - name: Build .deb
+        run: |
+          # build-deb.sh rebuilds via cargo; binaries are already fresh so it is quick.
+          ./packaging/build-deb.sh --output-dir dist/
+
+      - name: Build .rpm
+        run: ./packaging/build-rpm.sh --output-dir dist/
+
+      - name: Build .AppImage
+        run: ./packaging/build-appimage.sh --output-dir dist/
+
+      - name: Validate desktop entry
+        run: |
+          desktop-file-validate packaging/earshot.desktop
+          ls -la dist/
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.deb dist/*.rpm dist/*.AppImage --clobber

@@ -1,0 +1,17 @@
+#!/bin/sh
+# AppRun for the Earshot AppImage. Default is the tray (the thing to
+# double-click); `earshot-*.AppImage receiver ...` runs the terminal
+# receiver instead. Plain ASCII output only (project rule).
+set -eu
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="$HERE/usr/bin:$PATH"
+
+if [ "${1:-}" = "receiver" ]; then
+  shift
+  exec "$HERE/usr/bin/earshot-receiver" "$@"
+fi
+if [ "${1:-}" = "tray" ]; then
+  shift
+  exec "$HERE/usr/bin/earshot-tray" "$@"
+fi
+exec "$HERE/usr/bin/earshot-tray" "$@"

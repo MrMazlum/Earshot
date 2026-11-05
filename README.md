@@ -12,8 +12,36 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 |---|---|---|
 | 📱 **Phone** | [**earshot.apk**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot.apk) | Android. Sideload it — not on Play yet |
 | 🪟 **Windows** | [**earshot-receiver-windows-x86_64.zip**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-windows-x86_64.zip) | Also needs VB-Cable — free, once |
-| 🐧 **Linux** | [**earshot-receiver-linux-x86_64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-linux-x86_64.tar.gz) | Nothing else to install |
+| 🐧 **Linux tarball** | [**earshot-receiver-linux-x86_64.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-linux-x86_64.tar.gz) | Nothing else to install |
+| 🐧 **Linux .deb / .rpm / .AppImage** | [**releases page**](https://github.com/MrMazlum/Earshot/releases/latest) (`earshot_*_amd64.deb`, `earshot-*.rpm`, `Earshot-*-x86_64.AppImage`) | Same build, packaged — pick your distro's shape |
 | 🍎 **macOS** | [**earshot-receiver-macos-universal.tar.gz**](https://github.com/MrMazlum/Earshot/releases/latest/download/earshot-receiver-macos-universal.tar.gz) | Universal — Apple silicon and Intel. Also needs BlackHole — free, once |
+
+### 🐧 Linux: pick your install
+
+```bash
+# one line, latest release, user scope (sudo it for system-wide):
+curl -fsSL https://raw.githubusercontent.com/MrMazlum/Earshot/main/install.sh | sh
+```
+
+```bash
+# Debian / Ubuntu:
+sudo dpkg -i earshot_*_amd64.deb; sudo apt-get install -f
+# Fedora / openSUSE:
+sudo rpm -i earshot-*.rpm   # or: sudo dnf install earshot-*.rpm
+# any distro (portable, no root):
+chmod +x Earshot-*-x86_64.AppImage && ./Earshot-*-x86_64.AppImage
+```
+
+```bash
+# Arch: earshot-git rebuilds main on every install, so it is always the
+# latest commit. earshot-bin is the pinned release binary, no compile.
+yay -S earshot-git   # always latest
+yay -S earshot-bin   # pinned release, instant
+```
+
+All four install the same two binaries (`earshot-receiver`, `earshot-tray`),
+a menu entry and an icon. None of them enables start-at-login — run
+`earshot-tray --install` yourself, or tick *Start at login* in the tray.
 
 ## Quick start
 
@@ -32,9 +60,10 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 
 ### 🐧 Linux
 
-1. **Extract and run `./earshot-tray`.** This machine's address is in the icon's menu
-2. **On the phone:** install the APK. **Your PC is already in the list** — tap it, press **Start**
-3. **In Discord**, pick **Earshot** as your microphone
+1. **Install it** — one line above (tarball, `.deb`, `.rpm`, `.AppImage` or AUR — all the same build)
+2. **Run `earshot-tray`.** This machine's address is in the icon's menu
+3. **On the phone:** install the APK. **Your PC is already in the list** — tap it, press **Start**
+4. **In Discord**, pick **Earshot** as your microphone
 
 ### 🍎 macOS
 
@@ -438,6 +467,7 @@ doesn't recognise by name.
 | `app/` | the Android app — Flutter UI, Kotlin capture service |
 | `receiver/` | the PC program, in Rust |
 | `protocol/` | [the wire format, specified](protocol/README.md) |
+| `install.sh` + `packaging/` | Linux distribution: 1-line installer, `.deb`/`.rpm`/`.AppImage` builders, AUR `earshot-git` (always latest) + `earshot-bin` |
 | `tools/` | development helpers |
 | `docs/` | the security review this repo cleared before it was published |
 

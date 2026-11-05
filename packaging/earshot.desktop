@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Earshot
+GenericName=Phone microphone bridge
+Comment=Use your phone as this machine's microphone
+Exec=earshot-tray
+Icon=earshot
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=false
