@@ -59,6 +59,9 @@ yay -S earshot-bin
 
 ## Publishing to AUR (maintainer)
 
+AUR identity: account **9M2PJU**, SSH key `~/.ssh/aur`
+(`ssh://aur@aur.archlinux.org/...`, per `~/.ssh/config`).
+
 Each AUR package is its own tiny git repo on `aur.archlinux.org`, seeded
 from the matching directory in this repo. First time only:
 

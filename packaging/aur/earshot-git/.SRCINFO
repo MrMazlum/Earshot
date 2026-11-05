@@ -1,6 +1,6 @@
 pkgbase = earshot-git
 	pkgdesc = Use your phone as your PC's microphone, over Wi-Fi (latest git)
-	pkgver = 1.1.0.r37.g23d759f
+	pkgver = 1.1.0.r39.g3d6ebd2
 	pkgrel = 1
 	url = https://github.com/MrMazlum/Earshot
 	arch = x86_64
