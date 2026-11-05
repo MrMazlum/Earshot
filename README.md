@@ -17,7 +17,7 @@ Free, open source, no ads, no account, no cloud. Nothing ever leaves your home n
 
 ## Quick start
 
-<img src="docs/demo.gif" alt="The phone app: a PC picked from the remembered list, Start pressed, and the screen it collapses to once the PC is answering — a ring that follows your voice" width="232" align="right">
+<img src="docs/demo.gif" alt="The phone app, end to end: two PCs found on the network and remembered by name, the microphone row opened on its two sources and its rate, the noise-cleaning switch with the line underneath saying whether the PC is actually doing it, Start pressed, and the quiet screen it collapses to — a ring that follows your voice, and mute" width="232" align="right">
 
 ### 🪟 Windows
 
