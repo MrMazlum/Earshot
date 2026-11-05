@@ -304,6 +304,23 @@ jobs:
       # A debug-signed APK says so on the release page, not only in SECURITY.md — most people
       # downloading a build will never open that file. GitHub prepends this body to the notes it
       # generates, so the warning is the first thing above the changelog.
+      # Every published file's SHA-256, written next to the release as SHA256SUMS.txt and quoted
+      # in the notes. A downloader can check what they got; a packager can stop writing SKIP.
+      #
+      # The digests are computed from inside each artifact's own directory, so the file lists a
+      # bare filename — `sha256sum -c SHA256SUMS.txt` then works in the folder the downloads
+      # landed in, which is the only place anybody will run it.
+      - name: Checksum every artifact
+        run: |
+          : > SHA256SUMS.txt
+          for f in artifacts/earshot-apk/earshot.apk \
+                   artifacts/earshot-receiver-linux-x86_64/*.tar.gz \
+                   artifacts/earshot-receiver-windows-x86_64/*.zip \
+                   artifacts/earshot-receiver-macos-universal/*.tar.gz; do
+            ( cd "$(dirname "$f")" && sha256sum "$(basename "$f")" ) >> "$GITHUB_WORKSPACE/SHA256SUMS.txt"
+          done
+          cat SHA256SUMS.txt
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -323,10 +340,22 @@ jobs:
 
           EOF
           fi
+          # The digests go in the notes as well as in the file, because a packager reading the
+          # release page should not have to download an attachment to find them.
+          {
+            printf '## SHA-256\n\n'
+            printf 'Also attached as `SHA256SUMS.txt` — `sha256sum -c SHA256SUMS.txt` in the folder\n'
+            printf 'you downloaded into.\n\n'
+            printf '```\n'
+            cat "$GITHUB_WORKSPACE/SHA256SUMS.txt"
+            printf '```\n\n'
+          } >> "$notes"
+
           gh release create "${GITHUB_REF_NAME}" \
             --title "Earshot ${GITHUB_REF_NAME}" \
             --notes-file "$notes" \
             --generate-notes \
+            SHA256SUMS.txt \
             artifacts/earshot-apk/earshot.apk \
             artifacts/earshot-receiver-linux-x86_64/*.tar.gz \
             artifacts/earshot-receiver-windows-x86_64/*.zip \
