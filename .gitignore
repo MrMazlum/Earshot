@@ -35,3 +35,11 @@ local.config.*
 .vscode/
 .DS_Store
 *.swp
+
+# The demo MP4 — rendered by tools/demo/make_demo.sh for social posts, not a repository asset.
+# The GIF in docs/ is the one the README uses.
+/docs/demo.mp4
+
+# Claude Code's per-project files
+/.claude/
+/.mcp.json
