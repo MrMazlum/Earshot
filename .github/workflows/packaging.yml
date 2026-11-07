@@ -45,6 +45,11 @@ jobs:
           grep -q "^Version: *$ver" packaging/earshot.spec || (echo "::error::earshot.spec Version desynced from Cargo.toml ($ver)"; exit 1)
           grep -q "^pkgver=$ver" packaging/aur/earshot-bin/PKGBUILD || (echo "::error::earshot-bin PKGBUILD desynced from Cargo.toml ($ver)"; exit 1)
           grep -q "^	pkgver = $ver" packaging/aur/earshot-bin/.SRCINFO || (echo "::error::earshot-bin .SRCINFO desynced from Cargo.toml ($ver)"; exit 1)
+          # -bin fetches a fixed release tarball, so SKIP would install whatever
+          # the URL serves. Only -git (VCS source) may SKIP.
+          if grep -q "sha256sums=('SKIP')" packaging/aur/earshot-bin/PKGBUILD; then
+            echo "::error::earshot-bin must pin the release tarball digest (see SHA256SUMS.txt on the release)"; exit 1
+          fi
 
   build:
     name: build linux packages

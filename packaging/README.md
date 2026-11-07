@@ -59,9 +59,6 @@ yay -S earshot-bin
 
 ## Publishing to AUR (maintainer)
 
-AUR identity: account **9M2PJU**, SSH key `~/.ssh/aur`
-(`ssh://aur@aur.archlinux.org/...`, per `~/.ssh/config`).
-
 Each AUR package is its own tiny git repo on `aur.archlinux.org`, seeded
 from the matching directory in this repo. First time only:
 
@@ -78,10 +75,16 @@ cp packaging/aur/earshot-bin/PKGBUILD packaging/aur/earshot-bin/.SRCINFO /tmp/au
 cd /tmp/aur-bin && makepkg --printsrcinfo > .SRCINFO && git add PKGBUILD .SRCINFO && git commit -m "init" && git push
 ```
 
-On every release (`vX.Y.Z` tag), bump `-bin`:
+On every release (`vX.Y.Z` tag), bump `-bin` — a two-line edit:
 
 ```sh
-# update pkgver in packaging/aur/earshot-bin/PKGBUILD + .SRCINFO, then push it:
+# 1. Set pkgver to the new version in packaging/aur/earshot-bin/PKGBUILD.
+# 2. Set sha256sums to the Linux tarball digest from that release's
+#    SHA256SUMS.txt (attached to the GitHub release, digests also quoted
+#    in the release notes). Never SKIP: -bin fetches a fixed tarball URL,
+#    so the checksum is the only thing that notices the file changing.
+#    (SKIP is correct only for -git's VCS source.)
+# 3. Regenerate and push:
 cd /tmp/aur-bin
 cp ~/Earshot/packaging/aur/earshot-bin/* .
 makepkg --printsrcinfo > .SRCINFO   # regenerates pkgver metadata
