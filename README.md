@@ -488,6 +488,7 @@ the same size as fixing a typo.
 |---|---|
 | **[Uluhan Şimşek](https://github.com/uluhansmsk)** | **macOS support** — the whole platform, in one piece of work: the menu-bar tray, the BlackHole virtual microphone and the guided path to installing it, start-at-login as a LaunchAgent, the three-platform help text, and the universal binary in CI. 18 files. The audio core needed no changes; everything around it did |
 | **[Mazlum](https://github.com/MrMazlum)** | everything else — the phone app, the wire protocol, the receiver, the Windows and Linux sides |
+| **[9M2PJU](https://github.com/9M2PJU)** | **the Linux distribution layer** ([#12](https://github.com/MrMazlum/Earshot/pull/12)) — written in his own fork before anyone asked for it, then rebased and brought upstream: the one-line `install.sh`, the `.deb`, the `.rpm` and the AppImage with their build scripts, the desktop entry and the RPM spec, and a packaging workflow that attaches all three to the release the tarballs already go to. He also wrote and maintains **`earshot-git`** and **`earshot-bin`** on the AUR, and pinned `-bin` to the release tarball's SHA-256 instead of `SKIP`. 14 files. The phone app and the wire format needed no changes |
 | **[agenticsymphony-tech](https://github.com/agenticsymphony-tech)** | the README's *What the noise removal is* section ([#7](https://github.com/MrMazlum/Earshot/pull/7)) — written from the facts listed in [#5](https://github.com/MrMazlum/Earshot/issues/5). Automated, and it says so |
 
 ## Licence
